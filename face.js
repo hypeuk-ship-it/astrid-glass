@@ -69,7 +69,7 @@
     // Reference (Henlo's image): big plump eggs (ellipse ⅔ + stadium ⅓, slight bottom taper), tops leaning
     // ~22° OUTWARD on screen (measured −31°/+11° on a turned view; sphere curvature adds most of it, so the
     // authored tilt is small), aspect ~1.4, set low and fairly close (gap ≈ half an eye width).
-    Object.freeze({name:'ref',     w:.54, h:.64, ex:1.2,  r:1,   e:.7, taper:.10, tilt:.06, bend:0, lon:.45, lat:-.50, amin:99, sq:.25})]);
+    Object.freeze({name:'ref',     w:.4, h:.5, ex:1.2,  r:1,   e:.7, taper:.10, tilt:-.2, bend:0, lon:.36, lat:.04, amin:99, sq:.25})]);
   const LID0=REST.w/REST.h;               // lid at which the stadium reaches a circle (fade starts below it)
   /* Box for any shape. Lid/blink close it vertically: hh goes from the natural height to round (hh = hw)
      as lid goes 1 → LID0, then the eye fades (lidFade). For the stadium this is EXACTLY stadiumOf + lidFade
