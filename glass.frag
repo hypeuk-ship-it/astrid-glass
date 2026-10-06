@@ -53,6 +53,7 @@ uniform vec4  uMotif;   // x = type (0 oval/dot ellipse, 1 star, 2 heart, 3 spir
 uniform vec3  uMotifCol;// motif / pupil fill colour (toon ink used for outline/rim still)
 uniform vec4  uBrow;    // brow: lift×hh, halfW×hw, thick×hw, angle (rad, + = outer end higher)
 uniform vec3  uBrowCol; // brow colour
+uniform vec4  uBrowX;   // brow stroke extras: arch×hh (mid rise above chord), taper (outer/inner thick), outline width×thick, -
 uniform vec3  uToonCol; // toon ink: the coat's dark/mark tone
 uniform vec4  uShadow;  // eye drop shadow: strength, lat offset down (rad), gauss k (exp2), -
 uniform vec4  uShapeC;  // eye lid (radians): egg-centre offset, lid line (rel. to centre), corner k, -
@@ -93,33 +94,35 @@ vec3 tint(vec3 col, vec3 c, float a){
 // smooth max: rounds the corner where the lid line meets the shape by ~k
 float smax(float a, float c, float k){ float h = max(k - abs(a - c), 0.0) / k; return max(a, c) + h * h * k * 0.25; }
 // rp = rim transform applied after the shared lattice warp ('toon' rim: outward, up, scale; vec3(0,0,1) = none).
-float eyeSDF(vec2 p, vec2 b, float side, vec3 rp){
-  float sx = 1.0 + side * uAsym.x;                                        // 3/4 asymmetry ('toon' slider; 0 otherwise):
-  p.y += side * uAsym.y; p.x /= sx;                                       //  per-eye width + height
-  p.y -= uShapeC.x;                                                       // squint: centre drops ('top' shapes)
-  vec2 ib = uEyeA.zw;                                                     // 1/b (CPU)
-  // ONE fixed 3×3 lattice ('toon'; identity otherwise): only the bottom row moves → below the centre the sample
-  // is pulled down by w = lerp(1/k) across the columns (inner · mid · outer); js keeps the SDF ~unit (continuous)
+// Eye SDF. doCut=true applies the hood/expression cut (white fill); false = full oval (Polly rim / lid crescent).
+float eyeSDF_ex(vec2 p, vec2 b, float side, vec3 rp, bool doCut){
+  float sx = 1.0 + side * uAsym.x;
+  p.y += side * uAsym.y; p.x /= sx;
+  p.y -= uShapeC.x;
+  vec2 ib = uEyeA.zw;
   float f = clamp(-side * p.x * uLat.w, -1.0, 1.0);
   float wl = uLat.y + (f > 0.0 ? uLat.x - uLat.y : uLat.y - uLat.z) * f;
   vec2 pw = vec2(p.x, p.y < 0.0 ? p.y * wl : p.y);
   float js = 1.0 / (1.0 + (wl - 1.0) * clamp(-2.0 * p.y * ib.y, 0.0, 1.0));
   vec2 ro = vec2(side * rp.x, rp.y);
-  pw = (pw - ro) / rp.z;                                                  // rim: the same white scaled + moved (shared warp)
-  vec2 q = vec2(uShapeT.x * pw.x + side * uShapeT.y * pw.y, -side * uShapeT.y * pw.x + uShapeT.x * pw.y);  // lean
+  pw = (pw - ro) / rp.z;
+  vec2 q = vec2(uShapeT.x * pw.x + side * uShapeT.y * pw.y, -side * uShapeT.y * pw.x + uShapeT.x * pw.y);
   float yn = clamp(q.y * ib.y, -1.0, 1.0);
-  q.x -= side * uShapeT.z * b.x * (1.0 - yn * yn);                       // bow
-  float g = 1.0 - uShape.z * yn; q.x /= g;                                // taper (egg)
+  q.x -= side * uShapeT.z * b.x * (1.0 - yn * yn);
+  float g = 1.0 - uShape.z * yn; q.x /= g;
   float r = uShape.x * b.x; vec2 k = abs(q) - b + r;
-  float dR = length(max(k, 0.0)) + min(max(k.x, k.y), 0.0) - r;           // rounded box
-  vec2 e0 = q * ib, e1 = e0 * ib;                                         // ellipse (gradient-normalised
-  float k0 = length(e0);                                                  //  approx, exact on the edge)
+  float dR = length(max(k, 0.0)) + min(max(k.x, k.y), 0.0) - r;
+  vec2 e0 = q * ib, e1 = e0 * ib;
+  float k0 = length(e0);
   float dE = k0 * (k0 - 1.0) * inversesqrt(max(dot(e1, e1), 1e-8));
   float d = mix(dR, dE, uShape.y) * g * (rp.z * js);
-  vec2 pl = p - ro;                                                       // lid lines ride with the rim (lash line)
-  d = smax(d, dot(pl, side < 0.0 ? uCutN.xy : uCutN.zw) - uAsym.z, uAsym.w);   // cut / expression lid (parked = none)
-  return smax(d, pl.y - uShapeC.y, uShapeC.z) * min(sx, 1.0);             // lid from the top ('top' shapes; parked)
+  vec2 pl = p - ro;
+  if (doCut)
+    d = smax(d, dot(pl, side < 0.0 ? uCutN.xy : uCutN.zw) - uAsym.z, uAsym.w);
+  return smax(d, pl.y - uShapeC.y, uShapeC.z) * min(sx, 1.0);
 }
+float eyeSDF(vec2 p, vec2 b, float side, vec3 rp){ return eyeSDF_ex(p, b, side, rp, true); }
+
 
 // toon pupil coverage (unclipped), computed by the centre tap (always called first) and reused by the two side
 // taps: the pupil is painted INTO each tap's white colour, so the white's own edge clips it (one AA edge, no
@@ -166,17 +169,63 @@ float motifSDF(vec2 pq, float typ){
   if (typ < 3.5) return sdSpiral(pq);
   if (typ < 4.5) return sdRing(pq);
   if (typ < 5.5) return sdFlower(pq);
-  return length(pq) - 1.0;
+  return length(pq) - 1.0;                                 // tiny-dot (typ 6) scaled by pupil axes
+}
+// Stroke brow: thick rounded stroke along a quadratic arch (inner → apex → outer),
+// tapered toward the outer tip. Per-eye, centred on that eye — not a flat bar / unibrow.
+float sdCapsule2(vec2 p, vec2 a, vec2 b, float ra, float rb){
+  vec2 pa = p - a, ba = b - a;
+  float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-6), 0.0, 1.0);
+  return length(pa - ba * h) - mix(ra, rb, h);
 }
 float sdBrow(vec2 p, float side, vec2 b){
-  float lift = uBrow.x * b.y, hw = uBrow.y * b.x, th = max(uBrow.z * b.x, 1e-4), ang = uBrow.w;
+  float lift = uBrow.x * b.y, hw = max(uBrow.y * b.x, 1e-4), th0 = max(uBrow.z * b.x, 1e-4), ang = uBrow.w;
+  float arch = uBrowX.x * b.y, taper = clamp(uBrowX.y, 0.15, 1.0);
   float ca = cos(ang), sa = sin(ang);
-  vec2 mid = vec2(0.0, lift);
-  vec2 dir = vec2(side * ca, sa);
-  vec2 a1 = mid - dir * hw, a2 = mid + dir * hw;
-  vec2 pa = p - a1, ba = a2 - a1;
-  float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-6), 0.0, 1.0);
-  return length(pa - ba * h) - th;
+  // eye-local: origin at eye centre; chord through (0, lift) angled by ang; apex raised by arch
+  vec2 along = vec2(side * ca, sa);           // toward outer end
+  vec2 up    = vec2(-side * sa, ca);          // across brow, + = above chord
+  vec2 mid   = vec2(0.0, lift);
+  vec2 inner = mid - along * hw;
+  vec2 outer = mid + along * hw;
+  vec2 apex  = mid + up * arch;
+  float thIn = th0, thMid = th0 * mix(1.0, taper, 0.35), thOut = th0 * taper;
+  return min(sdCapsule2(p, inner, apex, thIn, thMid),
+             sdCapsule2(p, apex, outer, thMid, thOut));
+}
+// Classic anime anger-vein (4 short radial strokes) — mark≥1 above outer-upper of each eye;
+// mark≥2 also adds a second smaller pop near the brow tip.
+float sdAngerMark(vec2 p, float side, vec2 b, float n){
+  if (n < 0.5) return 1e3;
+  // primary mark sits above-outer relative to eye centre
+  vec2 c = vec2(side * b.x * 0.95, b.y * 1.55);
+  vec2 q = p - c;
+  float s = b.x * 0.22;
+  q /= max(s, 1e-4);
+  // 4 short capsules through the origin at 45° offsets
+  float d = 1e3;
+  for (int i = 0; i < 4; i++) {
+    float a = float(i) * 1.5707963 + 0.7853982;
+    vec2 dir = vec2(cos(a), sin(a));
+    vec2 a1 = dir * 0.15, a2 = dir * 1.05;
+    vec2 pa = q - a1, ba = a2 - a1;
+    float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-6), 0.0, 1.0);
+    d = min(d, length(pa - ba * h) - 0.14);
+  }
+  if (n > 1.5) {
+    // second smaller pop, slightly higher/outer
+    vec2 c2 = vec2(side * b.x * 1.25, b.y * 1.85);
+    vec2 q2 = (p - c2) / max(s * 0.7, 1e-4);
+    for (int i = 0; i < 4; i++) {
+      float a = float(i) * 1.5707963 + 0.4;
+      vec2 dir = vec2(cos(a), sin(a));
+      vec2 a1 = dir * 0.1, a2 = dir * 0.95;
+      vec2 pa = q2 - a1, ba = a2 - a1;
+      float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-6), 0.0, 1.0);
+      d = min(d, length(pa - ba * h) - 0.12);
+    }
+  }
+  return d * s;
 }
 
 // eye shading for one chroma tap, given its sphere coordinates (lon, lat) and visible-hemisphere Z
@@ -210,21 +259,51 @@ vec3 eyeTap(vec3 col, float lon, float lat, float Z, float rimA, float pc){
     vec2 pq = uPupilM * vec2(u / psx + side * uPupil.x - uPupil.y - pc2.x, v + side * uAsym.y - uPupil.z - pc2.y);
     float typ = uMotif.x;
     float dp;
+    vec2 pqn = pq * uPupilA.zw;
     if (typ < 0.5 || typ > 5.5) {
-      // ellipse (0) or tiny-dot (6): same gradient-normalised ellipse as before; type 6 just uses smaller axes from CPU
-      vec2 p0 = pq * uPupilA.zw, p1 = p0 * uPupilA.zw;
+      // ellipse (0) or tiny-dot (6): same gradient-normalised ellipse as classic toon; type 6 uses smaller axes
+      vec2 p0 = pqn, p1 = p0 * uPupilA.zw;
       float pk = length(p0);
       dp = pk * (pk - 1.0) * inversesqrt(max(dot(p1, p1), 1e-8));
     } else {
-      dp = motifSDF(pq * uPupilA.zw, typ);
+      dp = motifSDF(pqn, typ);
     }
     dp *= min(psx, 1.0) * uPupil.w * RR * (0.5 * Z + 0.5);
     gCovP = uToon.y * (1.0 - smoothstep(-w, w, dp));
-    gPupilCol = (typ > 0.5) ? uMotifCol : uToonCol;
+    // Polly / any emote (brow on) uses the motif colour even for oval/dot; classic toon keeps ink
+    gPupilCol = (uMotif.z > 0.0 || typ > 0.5) ? uMotifCol : uToonCol;
+    // soft white glint (toon-style catchlight) — one soft disc, upper-outer of pupil/motif
+    if (uMotif.z > 0.0 && typ < 5.5) {
+      vec2 gq = pqn - vec2(0.32, 0.38);
+      float gd = length(gq) - (typ < 0.5 ? 0.28 : 0.18);
+      float gv = smoothstep(0.0, 1.0, 1.0 - smoothstep(-w, w, gd * uPupil.w * RR * 0.45));
+      gPupilCol = mix(gPupilCol, vec3(1.0), gv * 0.75);
+    }
+  }
+  // Polly lid crescent: lavender in the band inside the full oval but above the hood cut (and soft upper wash when open).
+  if (uMotif.z > 0.0) {
+    float dFull = eyeSDF_ex(vec2(u, v), uEyeA.xy, side, vec3(0.0, 0.0, 1.0), false);
+    float dCut  = ds / max(RR * (0.5 * Z + 0.5), 1e-4);                   // already-cut white SDF in rad
+    float inFull = 1.0 - smoothstep(-w, w, dFull * RR * (0.5 * Z + 0.5));
+    float inCut  = 1.0 - smoothstep(-w, w, ds);
+    float crescent = max(inFull - inCut, 0.0);                            // hood lid area
+    float openGate = uAsym.z > 4.0 * uEyeA.y ? 0.0 : 1.0;
+    ec = mix(ec, vec3(0.76, 0.70, 0.88), crescent * 0.95 * openGate);
+    float upper = smoothstep(-uEyeA.y * 0.05, uEyeA.y * 0.50, v);
+    ec = mix(ec, vec3(0.78, 0.72, 0.88), 0.42 * upper * inCut);
   }
   ec = mix(ec, gPupilCol, gCovP);
 #endif
   float fill = 1.0 - smoothstep(-w, w, ds);
+  if (uMotif.z > 0.0 && uAsym.z <= 4.0 * uEyeA.y) {
+    float dFull = eyeSDF_ex(vec2(u, v), uEyeA.xy, side, vec3(0.0, 0.0, 1.0), false);
+    float inFull = 1.0 - smoothstep(-w, w, dFull * RR * (0.5 * Z + 0.5));
+    float crescent = max(inFull - fill, 0.0);
+    col = mix(col, vec3(0.76, 0.70, 0.88), crescent * vis * 0.95);
+#ifdef TOON
+    gFillMax = max(gFillMax, inFull * vis);
+#endif
+  }
 #ifdef TOON
   gFillMax = max(gFillMax, fill * vis);
 #endif
@@ -250,7 +329,9 @@ float eyeRim(float lon, float lat, float Z){
   float side = lon < 0.0 ? -1.0 : 1.0;
   float u = lon - uShapeT.w * side;
   float v = lat - uEyeK2.z + uEyeK2.w * u * u;
-  float d = eyeSDF(vec2(u - side * uToonR.x, v - uToonR.y), uEyeA.xy, side, uRimP.xyz) - uToon.z;
+  // Polly: rim follows the FULL shared oval (uncut); classic/toon rim follows the cut white
+  bool full = uMotif.z > 0.5;
+  float d = eyeSDF_ex(vec2(u - side * uToonR.x, v - uToonR.y), uEyeA.xy, side, uRimP.xyz, !full) - uToon.z;
   float vis = uEyeP.z * smoothstep(0.02, 0.08, Z);
   return uToon.x * vis * (1.0 - smoothstep(-uEyeK.x, uEyeK.x, d * RR * (0.5 * Z + 0.5)));
 }
@@ -288,17 +369,28 @@ vec3 eyes(vec3 col, vec2 p, vec2 off){
   // toon variant (compiled only while the toon layer is on: '#define TOON' is prepended by index.html)
   float rimA = 0.0;                                            // ≥ 0 on the centre tap, ≤ 0 on the side taps
   if (uToon.x > 0.0) { rimA = eyeRim(lon, lat, Z); col = mix(col, uToonCol, rimA); }
-  // emote brows (thick coloured capsules above each eye) + soft blush under the eyes
+  // emote stroke brows (arched tapered capsules + dark outline) + anger marks + soft blush
   if (uMotif.z > 0.0) {
     float side = lon < 0.0 ? -1.0 : 1.0;
     float u = lon - uShapeT.w * side;
     float v = lat - uEyeK2.z + uEyeK2.w * u * u;
-    float db = sdBrow(vec2(u, v), side, uEyeA.xy) * RR * (0.5 * Z + 0.5);
-    float bv = uEyeP.z * smoothstep(0.02, 0.08, Z) * (1.0 - smoothstep(-uEyeK.x, uEyeK.x, db));
-    col = mix(col, uBrowCol, bv * uMotif.z);
+    float sc = RR * (0.5 * Z + 0.5);
+    float db = sdBrow(vec2(u, v), side, uEyeA.xy) * sc;
+    float ow = max(uBrowX.z, 0.0) * max(uBrow.z * uEyeA.x, 1e-4) * sc;  // outline width in screen units
+    float vis = uEyeP.z * smoothstep(0.02, 0.08, Z);
+    float fill = 1.0 - smoothstep(-uEyeK.x, uEyeK.x, db);
+    float outline = (1.0 - smoothstep(-uEyeK.x, uEyeK.x, db - ow)) - fill;
+    col = mix(col, uBrowCol * 0.45, outline * vis * uMotif.z);          // dark stroke edge
+    col = mix(col, uBrowCol, fill * vis * uMotif.z);
+    // anger-vein marks (uMotif.y = 0/1/2)
+    if (uMotif.y > 0.5) {
+      float dm = sdAngerMark(vec2(u, v), side, uEyeA.xy, uMotif.y) * sc;
+      float mv = vis * (1.0 - smoothstep(-uEyeK.x, uEyeK.x, dm));
+      col = mix(col, uMotifCol, mv * 0.95);
+    }
   }
   if (uMotif.w > 0.0) {
-    // blush: soft ellipses just below/outside each eye
+    // blush: soft ellipses just below/outside each eye (love / blush poses)
     float side = lon < 0.0 ? -1.0 : 1.0;
     float u = lon - uShapeT.w * side + side * uEyeA.x * .55;
     float v = lat - uEyeK2.z - uEyeA.y * .85;
