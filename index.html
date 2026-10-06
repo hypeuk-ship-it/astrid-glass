@@ -11,7 +11,7 @@
   :root{--paper:#f1f1f1;--ink:#5a6272}
   html,body{margin:0;height:100%;background:var(--paper);overflow:hidden}
   body{display:grid;place-items:center;font:500 12px/1 -apple-system,"Instrument Sans",system-ui,sans-serif;color:var(--ink)}
-  #gl{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
+  #gl{position:fixed;left:0;top:0;width:0;height:0;display:block;touch-action:none}   /* sized to the orb in JS */
   .stage{position:relative;width:min(84vmin,620px);aspect-ratio:1;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:none;border-radius:50%;outline:none}
   .stage:focus-visible{box-shadow:0 0 0 2px var(--ink)}
   .stage{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
@@ -42,7 +42,7 @@
 
 <!-- Glass shader: inlined copy of glass.frag (run `python3 build.py` after editing glass.frag). -->
 <script type="x-shader/x-fragment" id="glass-frag">
-// Astrid glass · "vibe" (v8): soft, airy, washed-out. One fullscreen fragment pass, one draw call.
+// Astrid glass · "vibe" (v8): soft, airy, washed-out. One draw call over a canvas sized to the orb + bloom.
 // GLSL ES 1.00 (WebGL1/2). Units: AstridFace 240-space. Orb r118 at (120,120); stage framing -50..290.
 // Look (matches Henlo's reference): a white frosted form that bleeds into the paper with a Gaussian edge
 // (no outline, no glint), a pale luminous blue pool glowing up from the BOTTOM and fading to white haze
@@ -56,6 +56,14 @@
 //   fringe    : pink outside / cyan inside where the pool meets the frosted margin, strongest low
 //   eyes      : soft blue-white glow + white pebble fill, sampled 3× (R/G/B) → gentle chromatic edge
 //   petting   : body squash/stretch (whole frame), contact lens dent + soft brightening under the finger
+// Efficiency: the noise warp and the body transform run per vertex of a coarse grid (glass.vert);
+// everything that is constant across the frame is computed on the CPU (blob transforms with
+// their radii folded in, head-turn map, eye stadium params, every slider-derived width/edge, derived
+// colours); gaussians are exp2 with a precomputed −log2(e)/w² factor; pixels past the bloom early-out to
+// paper (+ a sin-free dither hash); the eye SDF runs only inside a tight capsule per eye (CPU-projected
+// stadium axis + glow margin, ~13% of canvas pixels) and does ONE sphere inversion per pixel: the R/B
+// chroma taps reuse it through the analytic Jacobian of (lon, lat) instead of two more inversions.
+// The page background is the same paper colour, so the canvas itself only covers the orb + bloom.
 // Port note (Metal): uniforms map 1:1 to a constant buffer; plain functions; no textures.
 #ifdef GL_FRAGMENT_PRECISION_HIGH
 precision highp float;
@@ -63,21 +71,26 @@ precision highp float;
 precision mediump float;
 #endif
 
-uniform vec3  uView;    // centre x,y (drawing-buffer px, GL origin bottom-left), units per px
+varying vec2  vP;       // body-space position (units), from the vertex grid (affine → exact per pixel)
+varying vec2  vWarp;    // pool noise warp (units), evaluated per grid vertex (smooth 30–60u features)
 uniform vec3  uPaper, uCore, uDeep, uMid, uEdge, uHalo, uEye, uEyeHi, uEyeLo, uGlow;
-uniform vec2  uMode;    // x: unused (was inner line), y: dark (0/1)
+uniform vec3  uBloomCol, uLiftCol, uTouchCol;  // per coat: mix(mid,edge,.35) · mix(mid,CYAN,.45) · mix(halo,glow,dark)
+uniform vec4  uAura;    // rgb: mix(core,mid,.3), a: 0.42·(1 − 0.4·dark)
+uniform vec2  uMode;    // x: unused, y: dark (0/1)
 uniform vec4  uRot;     // eyes: cos yaw, sin yaw, cos pitch, sin pitch
-uniform vec4  uEyeP;    // eyes: stadium half-width (rad), cap half-length (rad), lidFade, reject radius (units)
-uniform vec4  uEyeC;    // eyes: projected screen centres (L.xy, R.xy) — cheap bounding reject only
-uniform vec4  uCoreM;   // glass head-turn: offset xy (units, inverted to gaze), foreshorten scale xy
-uniform mat2  uMA, uMB, uMC; // blob drift (floor, pool, bloom): inverse of rotate·scale (precomputed in JS)
-uniform vec2  uTA, uTB, uTC; // blob drift: drift origin (120,144.8) + translate (units)
-uniform float uNT;      // noise time (advanced by JS × drift speed, wrapped at 28900)
-uniform vec4  uTune1;   // eye RGB split, edge softness, haze, pool height
-uniform vec4  uTune2;   // eye softness, fringe, noise warp (units), pool strength
-uniform vec4  uTouch;   // petting contact: x, y (units), pressure 0..1 (sprung), dent strength
-uniform mat2  uBodyM;   // petting squash/stretch: inverse body transform about the orb centre
-uniform vec4  uFace;    // cos roll, sin roll, happy eye lift (rad of lat), happy arc (0..~.4)
+uniform vec4  uEyeP;    // eyes: stadium half-width (rad), cap half-length (rad), lidFade, capsule radius (units)
+uniform vec4  uEyeL, uEyeR; // eyes: tight bounding capsules = projected stadium axis ends (a.xy, b.xy), screen units
+uniform vec4  uEyeK;    // eyes: soft edge w, glow k, aura k (exp2 factors), 1/hw
+uniform vec4  uEyeK2;   // eyes: 1/(2(cap+hw)), rim-shade edge (−0.7·hw·RR), lat centre (0.04+lift), arc/hw
+uniform vec4  uFace;    // cos roll, sin roll, -, -
+uniform vec4  uQ;       // head-turn map (inverted gaze + foreshorten): q = pl·xy + zw
+uniform mat2  uBA, uBB, uBC; // blobs (floor, pool, bloom): drift⁻¹ with 1/radii folded in
+uniform vec2  uCA, uCB, uCC; //   … and their offsets: blob-space d = B·q + c (|d| = 1 at the blob edge)
+uniform vec4  uFrost;   // halo exp2 k, body edge0, body edge1, early-out radius
+uniform vec4  uPoolK;   // inset at sides (30es), inset at bottom (14es), margin in (10es), margin out (6es+2)
+uniform vec4  uFringeK; // fringe exp2 k, outer-smear exp2 k, fringe strength, haze
+uniform vec4  uMisc;    // pool strength, chroma split scale, contact exp2 k (34u), dent strength
+uniform vec4  uTouch;   // petting contact: x, y (units), pressure (sprung), -
 
 const vec2  C  = vec2(120.0, 120.0);
 const float R  = 118.0;   // orb
@@ -85,146 +98,170 @@ const float RR = 110.0;   // eye sphere (AstridFace projector)
 const vec3  PINK = vec3(0.976, 0.620, 0.902);
 const vec3  CYAN = vec3(0.560, 0.905, 1.000);
 
-float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-// lattice wrapped to 289 cells → the noise is periodic, so JS can wrap uNT (period 28900 s, a common
-// multiple of every rate below ×289) and the hash never sees huge arguments after hours on screen.
-// Identical to the unwrapped noise for the first 289 lattice cells.
-float vnoise(vec2 p){
-  vec2 i = floor(p), f = fract(p); f = f*f*(3.0 - 2.0*f);
-  vec2 j = mod(i + 1.0, 289.0); i = mod(i, 289.0);              // wrap both corners → seamless
-  return mix(mix(hash(i), hash(vec2(j.x, i.y)), f.x),
-             mix(hash(vec2(i.x, j.y)), hash(j), f.x), f.y);
-}
-float gauss(float x, float w){ return exp(-(x*x) / (w*w)); }
-
-const vec2 DO = vec2(120.0, 144.8);
-vec2 undrift(vec2 q, mat2 m, vec2 ot){ return m * (q - ot) + DO; }
+// gauss(x, w) = exp(−x²/w²) = exp2(x²·k) with k = −log2(e)/w² precomputed on the CPU
+float g2(float x, float k){ return exp2(x * x * k); }
+// cheap sin-free hash for the dither only (±0.5/255)
+float dhash(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 
 // dark paper wants light added (screen), light paper wants a tint (mix)
 vec3 tint(vec3 col, vec3 c, float a){
   return mix(mix(col, c, a), 1.0 - (1.0 - col) * (1.0 - c * a * 0.8), uMode.y);
 }
 
-// eyes: screen → sphere (r=RR) → undo yaw, pitch → lon/lat → analytic stadium (AstridFace.eyePath)
-vec3 eyes(vec3 col, vec2 p){
-  vec2 el = p - uEyeC.xy, er = p - uEyeC.zw;
-  if (min(dot(el, el), dot(er, er)) > uEyeP.w * uEyeP.w) return col;   // far from both eyes
-  vec2 s0 = (p - C) / RR; s0.y = -s0.y;
+// eye shading for one chroma tap, given its sphere coordinates (lon, lat) and visible-hemisphere Z
+vec3 eyeTap(vec3 col, float lon, float lat, float Z){
+  float hw = uEyeP.x, cap = uEyeP.y;
+  float u = lon - (lon < 0.0 ? -0.2 : 0.2);
+  // happy: eyes lift a touch and bow into a soft ∩ (edges droop) — same stadium, never flatter
+  float v = lat - uEyeK2.z + uEyeK2.w * u * u;
+  float d  = length(vec2(u, v - clamp(v, -cap, cap))) - hw;   // radians
+  float ds = d * RR * (0.5 * Z + 0.5);                        // ≈ screen units (foreshortened)
+  float w  = uEyeK.x;
+  float vis = uEyeP.z * smoothstep(0.02, 0.08, Z);            // lidFade · z>0.02 cull
+  float dsp = max(ds, 0.0);
+  col = tint(col, uGlow, 0.26 * g2(dsp, uEyeK.y) * vis);      // soft luminous glow
+  col = mix(col, uAura.rgb, uAura.a * g2(dsp - 1.5, uEyeK.z) * vis);   // pool-coloured aura
+  // pebble fill: bright top-right → white → faint shade lower-left, plus a soft inner edge shade
+  float uu = clamp(u * uEyeK.w * 0.5 + 0.5, 0.0, 1.0);
+  float vv = clamp(0.5 - v * uEyeK2.x, 0.0, 1.0);
+  float t  = clamp((0.45*(1.0 - uu) + vv) * (1.0 / 1.2), 0.0, 1.0);
+  vec3 ec  = t < 0.5 ? mix(uEyeHi, uEye, t * 2.0) : mix(uEye, uEyeLo, 0.55 * smoothstep(0.55, 1.0, t));
+  float rimShade = smoothstep(uEyeK2.y, 0.0, ds) * smoothstep(0.3, 0.9, t);
+  ec = mix(ec, uEyeLo, 0.4 * rimShade);
+  float fill = 1.0 - smoothstep(-w, w, ds);
+  return mix(col, ec, fill * vis);
+}
+// squared distance from p to segment ab (capsule test without a sqrt)
+float seg2(vec2 p, vec4 ab){ vec2 pa = p - ab.xy, ba = ab.zw - ab.xy;
+  vec2 e = pa - ba * clamp(dot(pa, ba) / max(dot(ba, ba), 1e-6), 0.0, 1.0); return dot(e, e); }
+// eyes with a gentle RGB split: screen → sphere (r=RR) → undo roll, yaw, pitch → lon/lat → analytic
+// stadium (AstridFace.eyePath). The sphere map runs ONCE at p; the R and B taps (p ± off, 1–4u away)
+// step along its analytic Jacobian (second-order error ≈ 0.01u — invisible) instead of 3 full maps.
+vec3 eyes(vec3 col, vec2 p, vec2 off){
+  vec2 s0 = (p - C) * (1.0 / RR); s0.y = -s0.y;
   vec2 s = vec2(s0.x*uFace.x + s0.y*uFace.y, -s0.x*uFace.y + s0.y*uFace.x);   // undo roll
   float rr = dot(s, s);
-  if (rr >= 1.0 || uEyeP.z <= 0.0) return col;
+  if (rr >= 0.999) return col;
   float Z  = sqrt(1.0 - rr);
   float x  = s.x*uRot.x - Z*uRot.y;
   float z1 = s.x*uRot.y + Z*uRot.x;
   float y  = s.y*uRot.z + z1*uRot.w;
   float z  = -s.y*uRot.w + z1*uRot.z;
   float lon = atan(x, z), lat = asin(clamp(y, -1.0, 1.0));
-  float hw = uEyeP.x, cap = uEyeP.y;
-  float u = lon - (lon < 0.0 ? -0.2 : 0.2);
-  // happy: eyes lift a touch and bow into a soft ∩ (edges droop) — same stadium, never flatter
-  float v = lat - 0.04 - uFace.z + uFace.w * u * u / max(hw, 1e-4);
-  float d  = length(vec2(u, v - clamp(v, -cap, cap))) - hw;   // radians
-  float ds = d * RR * mix(Z, 1.0, 0.5);                       // ≈ screen units (foreshortened)
-  float w  = 0.8 * uTune2.x + 0.4;
-  float vis = uEyeP.z * smoothstep(0.02, 0.08, Z);            // lidFade · z>0.02 cull
-  // soft luminous glow: the pebble lights the haze around it a little
-  float glow = 0.26 * gauss(max(ds, 0.0), 4.0 + 3.0*w);
-  col = tint(col, uGlow, glow * vis);
-  // pool-coloured aura hugging the outline: keeps the pebbles reading when a glance carries them
-  // out over the white haze (on the blue pool it is nearly invisible)
-  col = mix(col, mix(uCore, uMid, 0.3), 0.42 * gauss(max(ds, 0.0) - 1.5, 3.5 + 2.5*w) * vis * (1.0 - uMode.y*0.4));
-  // pebble fill: bright top-right → white → faint shade lower-left, plus a soft inner edge shade
-  float uu = clamp(u / max(hw, 1e-4) * 0.5 + 0.5, 0.0, 1.0);
-  float vv = clamp(0.5 - v / (2.0 * (cap + hw) + 1e-4), 0.0, 1.0);
-  float t  = clamp((0.45*(1.0 - uu) + vv) / 1.2, 0.0, 1.0);
-  vec3 ec  = t < 0.5 ? mix(uEyeHi, uEye, t / 0.5) : mix(uEye, uEyeLo, 0.55 * smoothstep(0.55, 1.0, t));
-  float rimShade = smoothstep(-hw * RR * 0.7, 0.0, ds) * smoothstep(0.3, 0.9, t);
-  ec = mix(ec, uEyeLo, 0.4 * rimShade);
-  float fill = 1.0 - smoothstep(-w, w, ds);
-  return mix(col, ec, fill * vis);
+  // Jacobian wrt s, then wrt screen units (s = R(−roll)·diag(1,−1)·(p−C)/RR)
+  vec2 gZ  = -s / Z;
+  vec2 gx  = vec2(uRot.x, 0.0) - uRot.y * gZ;
+  vec2 gz1 = vec2(uRot.y, 0.0) + uRot.x * gZ;
+  vec2 gy  = vec2(0.0, uRot.z) + uRot.w * gz1;
+  vec2 gz  = vec2(0.0, -uRot.w) + uRot.z * gz1;
+  float h2 = x*x + z*z;                                       // = cos²(lat)
+  vec2 gLon = (z * gx - x * gz) / h2, gLat = gy * inversesqrt(max(h2, 1e-6));
+  // Δs for the screen offset o: (cr·o.x − sr·o.y, −sr·o.x − cr·o.y)/RR
+  vec2 ds_ = vec2(uFace.x*off.x - uFace.y*off.y, -uFace.y*off.x - uFace.x*off.y) * (1.0 / RR);
+  vec3 dl = vec3(dot(gLon, ds_), dot(gLat, ds_), dot(gZ, ds_));
+  return vec3(eyeTap(col, lon + dl.x, lat + dl.y, Z + dl.z).r,
+              eyeTap(col, lon, lat, Z).g,
+              eyeTap(col, lon - dl.x, lat - dl.y, Z - dl.z).b);
 }
 
 void main(){
   vec2 f = gl_FragCoord.xy;
-  vec2 p = C + vec2(f.x - uView.x, uView.y - f.y) * uView.z;
-  p = C + uBodyM * (p - C);                    // petting squash/stretch (identity at rest)
+  vec2 p = vP;                                 // already squash/stretched (petting) in the vertex stage
   vec2 d = p - C; float r = length(d * 0.01) * 100.0;   // scaled: no fp16 overflow far off-orb (mediump)
-  float es = uTune1.y;
-  float low = (p.y - C.y) / R;                 // −1 top … +1 bottom
+  float dith = (dhash(mod(f, 64.0)) - 0.5) / 255.0;     // dither (kills 8-bit banding)
+
+  // early-out: past the bloom (its gaussian is < 0.3% there) only paper remains
+  if (r > uFrost.w) { gl_FragColor = vec4(uPaper + dith, 1.0); return; }
 
   // ---- frost: paper · white bloom · frosted body (all fixed; Gaussian edge, no outline) ----
-  vec3 col = uPaper;
   float out_ = max(r - R + 4.0, 0.0);
-  col = mix(col, uHalo, 0.38 * gauss(out_, 10.0 * es + 3.0));
-  float body = 1.0 - smoothstep(R - 6.0*es - 1.0, R + 5.0*es + 1.0, r);
+  vec3 col = mix(uPaper, uHalo, 0.38 * g2(out_, uFrost.x));
+  float body = 1.0 - smoothstep(uFrost.y, uFrost.z, r);
   col = mix(col, uEdge, body);
 
   if (r < R + 12.0) {
-    // ---- pool: head-turn (inverted, delayed) → noise warp → random-target drift ----
+    float low = (p.y - C.y) * (1.0 / R);       // −1 top … +1 bottom
     // ---- petting contact: a shallow dent under the finger (concave lens → slight minify) ----
     vec2 pt = p - uTouch.xy;
-    float tg = gauss(length(pt), 34.0) * uTouch.z;
-    vec2 pl = p + pt * (0.22 * uTouch.w * tg);
-    vec2 np = pl * 0.016;
-    vec2 warp = vec2(vnoise(np + vec2(uNT*0.11, uNT*0.05)) + 0.5*vnoise(np*2.1 + vec2(-uNT*0.07, uNT*0.09) + 3.7),
-                     vnoise(np + vec2(7.1 - uNT*0.06, 2.3 + uNT*0.10)) + 0.5*vnoise(np*2.1 + vec2(uNT*0.08, -uNT*0.06) + 9.2)) - 0.75;
-    warp *= uTune2.z;
-    vec2 q = (pl - C - uCoreM.xy) / uCoreM.zw + C + warp;
-    float ph = uTune1.w;
-    // main pool: a broad dome rising from below the orb
-    vec2 qb = undrift(q, uMB, uTB);
-    float dP = length((qb - vec2(120.0, 222.0)) / vec2(136.0, 196.0 * ph));
+    float tg = g2(length(pt), uMisc.z) * uTouch.z;
+    vec2 pl = p + pt * (0.22 * uMisc.w * tg);
+    // ---- pool: head-turn (inverted, delayed) → noise warp (vertex grid) → random-target drift ----
+    vec2 q = pl * uQ.xy + uQ.zw + vWarp;
+    float dP = length(uBB * q + uCB);          // main pool: a broad dome rising from below the orb
     float aP = 1.0 - smoothstep(0.48, 0.98, dP);
     vec3  cP = mix(uMid, uCore, smoothstep(0.95, 0.55, dP));
-    // deeper floor (bottom, slightly off-centre)
-    vec2 qa = undrift(q, uMA, uTA);
-    float dA = length((qa - vec2(108.0, 186.0)) / vec2(82.0, 56.0 * mix(1.0, ph, 0.5)));
+    float dA = length(uBA * q + uCA);          // deeper floor (bottom, slightly off-centre)
     float aA = 0.55 * (1.0 - smoothstep(0.1, 1.0, dA));
-    // pale bloom that morphs through the upper pool
-    vec2 qc = undrift(q, uMC, uTC);
-    float dC = length((qc - vec2(140.0, 128.0)) / vec2(70.0, 52.0));
+    float dC = length(uBC * q + uCC);          // pale bloom that morphs through the upper pool
     float aC = 0.45 * (1.0 - smoothstep(0.0, 1.0, dC));
     // frosted margin: the pool never reaches the rim (sides wide, bottom thinner)
-    float inset = mix(30.0, 14.0, smoothstep(0.2, 0.95, low)) * es + 4.0;
-    float m = 1.0 - smoothstep(R - inset - 10.0*es, R - inset + 6.0*es + 2.0, r);
-    float pa = clamp(aP * uTune2.w, 0.0, 1.0);
+    float inset = mix(uPoolK.x, uPoolK.y, smoothstep(0.2, 0.95, low)) + 4.0;
+    float rb = R - inset;                                       // pool boundary radius
+    float m = 1.0 - smoothstep(rb - uPoolK.z, rb + uPoolK.w, r);
+    float pa = clamp(aP * uMisc.x, 0.0, 1.0);
     vec3 pool = mix(uEdge, cP, pa);
-    pool = mix(pool, uDeep, aA * aP * uTune2.w);
-    pool = mix(pool, mix(uMid, uEdge, 0.35), aC * aP);
+    pool = mix(pool, uDeep, aA * aP * uMisc.x);
+    pool = mix(pool, uBloomCol, aC * aP);
     // backlit floor: just above the bottom margin the pool goes lighter + cyan (luminous, not muddy)
     float lift = smoothstep(0.55, 0.95, low) * m;
-    pool = mix(pool, mix(uMid, CYAN, 0.45), 0.55 * lift * pa * (1.0 - uMode.y*0.5));
+    pool = mix(pool, uLiftCol, 0.55 * lift * pa * (1.0 - uMode.y*0.5));
     col = mix(col, pool, m * body);
 
     // ---- haze: white veil, heavier toward the top (fixed) ----
-    float hz = uTune1.z * (0.06 + 0.70 * smoothstep(-0.38, -0.98, low));
+    float hz = uFringeK.w * (0.06 + 0.70 * smoothstep(-0.38, -0.98, low));
     col = mix(col, uEdge, clamp(hz, 0.0, 1.0) * body);
 
     // ---- fringe: blurred prism smear where the blue meets the frosted margin, strongest low ----
-    float fr = uTune2.y * smoothstep(-0.35, 0.85, low) * (0.25 + 0.75 * clamp(pa * 1.6, 0.0, 1.0));
-    float rb = R - inset;                                       // pool boundary radius
-    float fw = 5.0 * es + 2.5;
-    col = tint(col, PINK, 0.44 * fr * gauss(r - (rb + 2.0), fw));
-    col = tint(col, CYAN, 0.30 * fr * gauss(r - (rb - 7.0), fw));
+    float fr = uFringeK.z * smoothstep(-0.35, 0.85, low) * (0.25 + 0.75 * clamp(pa * 1.6, 0.0, 1.0));
+    col = tint(col, PINK, 0.44 * fr * g2(r - (rb + 2.0), uFringeK.x));
+    col = tint(col, CYAN, 0.30 * fr * g2(r - (rb - 7.0), uFringeK.x));
     // faint outer smear on the paper just below the form's soft bottom edge
-    col = tint(col, PINK, 0.07 * uTune2.y * smoothstep(0.5, 1.0, low) * gauss(r - (R + 2.0), 4.0 + 3.0*es));
+    col = tint(col, PINK, 0.07 * uFringeK.z * smoothstep(0.5, 1.0, low) * g2(r - (R + 2.0), uFringeK.y));
 
     // ---- eyes: 3 taps (R/G/B) at slightly different positions → gentle chromatic edge ----
     vec2 dir = r > 1e-3 ? d / r : vec2(0.0);
-    vec2 off = (dir * (0.8 + 2.2 * min(r / R, 1.0)) + vec2(1.5, 0.0)) * uTune1.x * mix(1.0, 0.7, uMode.y);
-    col = vec3(eyes(col, pl + off).r, eyes(col, pl).g, eyes(col, pl - off).b);
+    vec2 off = (dir * (0.8 + 2.2 * min(r * (1.0 / R), 1.0)) + vec2(1.5, 0.0)) * uMisc.y;
+    // one tight bounding test for all three taps (each tap is within |off| of pl)
+    float rj = uEyeP.w + length(off);
+    if (uEyeP.z > 0.0 && min(seg2(pl, uEyeL), seg2(pl, uEyeR)) < rj * rj)
+      col = eyes(col, pl, off);
     // contact light: the glass brightens softly where it's touched; dent walls shade (light top-left)
-    col = tint(col, mix(uHalo, uGlow, uMode.y), 0.34 * tg * body);
-    col += vec3(0.05 * uTouch.w * tg * body * dot(pt / 34.0, vec2(0.7, 0.7)));
+    col = tint(col, uTouchCol, 0.34 * tg * body);
+    col += vec3(uMisc.w * tg * body * dot(pt, vec2(0.05 * 0.7 / 34.0)));
   }
 
-  col += (hash(mod(f, 64.0)) - 0.5) / 255.0;   // dither (kills 8-bit banding); mod keeps mediump finite
-  gl_FragColor = vec4(col, 1.0);
+  gl_FragColor = vec4(col + dith, 1.0);
 }
 </script>
 <script type="x-shader/x-vertex" id="glass-vert">
-attribute vec2 aPos;
-void main(){ gl_Position = vec4(aPos, 0.0, 1.0); }
+// Astrid glass — vertex stage. A coarse grid (24×24 cells over the canvas; one draw call) carries the
+// work that is smooth across the orb: the canvas → units map, the petting squash/stretch (affine, so
+// interpolation is exact) and the pool's noise warp (value noise with 30–60u features: linear
+// interpolation over ~14u cells stays under ~1/255). Vertex stage = highp everywhere.
+attribute vec2 aPos;          // clip-space grid vertex
+uniform vec4  uVS;            // clip → units: p = uVS.xy + aPos·uVS.zw (y down)
+uniform mat2  uBodyM;         // petting squash/stretch: inverse body transform about the orb centre
+uniform float uNT;            // noise time (advanced by JS × drift speed, wrapped at 28900)
+uniform float uWarp;          // noise warp amplitude (units)
+varying vec2  vP;
+varying vec2  vWarp;
+const vec2 C = vec2(120.0, 120.0);
+float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+// lattice wrapped to 289 cells → periodic, so JS can wrap uNT (28900 = 289 × 100) seamlessly
+float vnoise(vec2 p){
+  vec2 i = floor(p), f = fract(p); f = f*f*(3.0 - 2.0*f);
+  vec2 j = mod(i + 1.0, 289.0); i = mod(i, 289.0);
+  return mix(mix(hash(i), hash(vec2(j.x, i.y)), f.x),
+             mix(hash(vec2(i.x, j.y)), hash(j), f.x), f.y);
+}
+void main(){
+  vec2 p = C + uBodyM * (uVS.xy + aPos * uVS.zw - C);
+  vec2 np = p * 0.016;
+  vec2 warp = vec2(vnoise(np + vec2(uNT*0.11, uNT*0.05)) + 0.5*vnoise(np*2.1 + vec2(-uNT*0.07, uNT*0.09) + 3.7),
+                   vnoise(np + vec2(7.1 - uNT*0.06, 2.3 + uNT*0.10)) + 0.5*vnoise(np*2.1 + vec2(uNT*0.08, -uNT*0.06) + 9.2)) - 0.75;
+  vP = p; vWarp = warp * uWarp;
+  gl_Position = vec4(aPos, 0.0, 1.0);
+}
 </script>
 <script src="coats.js"></script>
 <script src="springs.js"></script>
@@ -237,6 +274,8 @@ const {spring,step,stepScaled,snap,save,at}=AstridSprings;
 const F=AstridFace, RR=F.RR;
 const $=id=>document.getElementById(id);
 const Q=new URLSearchParams(location.search);
+/* test hook: ?seed=N makes Math.random deterministic (mulberry32) so scripted frames are reproducible */
+if(Q.has('seed')){ let a=(+Q.get('seed')||1)>>>0; Math.random=function(){a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;}; }
 const STEP=1000/60;                 // the whole motion model runs at a fixed 60 Hz (rig feel), any display rate
 const NT_WRAP=28900;                // noise time period (see glass.frag vnoise): wrap is seamless
 
@@ -285,8 +324,10 @@ const GL_OPTS={antialias:false,alpha:false,depth:false,stencil:false,premultipli
 const toFallback=why=>{console.warn('Astrid: '+why+', using the SVG fallback'); location.replace('v6-svg.html'+location.search);};
 const gl=cv.getContext('webgl',GL_OPTS)||cv.getContext('experimental-webgl',GL_OPTS);
 if(!gl){ toFallback('WebGL unavailable'); return; }
-const UNIFORMS=['uTouch','uBodyM','uFace','uView','uPaper','uCore','uDeep','uMid','uEdge','uHalo','uEye','uEyeHi','uEyeLo','uGlow','uMode','uRot','uEyeP','uEyeC','uCoreM','uMA','uMB','uMC','uTA','uTB','uTC','uNT','uTune1','uTune2'];
-let U={}, lost=false;
+const UNIFORMS=['uVS','uBodyM','uNT','uWarp','uPaper','uCore','uDeep','uMid','uEdge','uHalo','uEye','uEyeHi','uEyeLo','uGlow','uBloomCol','uLiftCol','uTouchCol','uAura','uMode',
+  'uRot','uEyeP','uEyeL','uEyeR','uEyeK','uEyeK2','uFace','uQ','uBA','uBB','uBC','uCA','uCB','uCC','uFrost','uPoolK','uFringeK','uMisc','uTouch'];
+let U={}, lost=false; const GN=24, GCOUNT=GN*GN*6;
+const draw=()=>gl.drawElements(gl.TRIANGLES,GCOUNT,gl.UNSIGNED_SHORT,0);
 function initGL(){              // (re)build everything GPU-side; also used after a context restore
   const sh=(type,id)=>{const s=gl.createShader(type);gl.shaderSource(s,$(id).textContent);gl.compileShader(s);
     if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)&&!gl.isContextLost()) console.error('Astrid shader compile error ('+id+'):\n'+gl.getShaderInfoLog(s));
@@ -300,8 +341,12 @@ function initGL(){              // (re)build everything GPU-side; also used afte
     return false;
   }
   gl.useProgram(prog);
-  const buf=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,buf);
-  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);   // one fullscreen triangle
+  // one draw call: a GN×GN grid over the canvas (the vertex stage carries the smooth per-pixel work)
+  const v=new Float32Array((GN+1)*(GN+1)*2), ix=new Uint16Array(GN*GN*6);
+  for(let j=0,k=0;j<=GN;j++) for(let i=0;i<=GN;i++){v[k++]=i/GN*2-1; v[k++]=j/GN*2-1;}
+  for(let j=0,k=0;j<GN;j++) for(let i=0;i<GN;i++){const a=j*(GN+1)+i, b=a+1, c=a+GN+1, d=c+1; ix[k++]=a;ix[k++]=b;ix[k++]=c;ix[k++]=b;ix[k++]=d;ix[k++]=c;}
+  gl.bindBuffer(gl.ARRAY_BUFFER,gl.createBuffer()); gl.bufferData(gl.ARRAY_BUFFER,v,gl.STATIC_DRAW);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,gl.createBuffer()); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,ix,gl.STATIC_DRAW);
   gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0,2,gl.FLOAT,false,0,0);
   U={}; UNIFORMS.forEach(n=>U[n]=gl.getUniformLocation(prog,n));
   return true;
@@ -310,17 +355,30 @@ if(!initGL()&&!gl.isContextLost()){ toFallback('shader failed to build'); return
 
 /* ---------------- size / DPR ---------------- */
 let W=0,H=0,dpr=1,rscale=1, needResize=true;   // rscale: adaptive render scale
+/* The canvas covers only the orb + its bloom (square, centred on the stage, clipped to the viewport);
+   the page background is the same paper colour, so nothing outside it needs drawing.
+   Extent: early-out radius from the edge-softness slider × 1.12 for the max petting stretch (+ wobble). */
+function orbExtent(){ const es=T.edge; return Math.max(118-4+2.5*(10*es+3),118+12)*1.12+2; }   // units
+/* stage rect cached here (resize / ResizeObserver / DPR change) so pointer events neither allocate a
+   DOMRect nor force a layout read; the page doesn't scroll (overflow hidden) */
+const SR={l:.5,t:.5,w:.5,h:.5};
+function stageRect(){ const r=stage.getBoundingClientRect(); SR.l=r.left; SR.t=r.top; SR.w=r.width||1; SR.h=r.height||1; return r; }
 function resize(){
   needResize=false;
+  const sr=stageRect();
   if(lost) return;
-  const cr=cv.getBoundingClientRect(), sr=stage.getBoundingClientRect();
-  dpr=Math.min(window.devicePixelRatio||1,2)*rscale;
-  W=Math.max(1,Math.round(cr.width*dpr)); H=Math.max(1,Math.round(cr.height*dpr));
+  const vw=document.documentElement.clientWidth||innerWidth, vh=document.documentElement.clientHeight||innerHeight;
+  const k=340/Math.max(1,sr.width), half=orbExtent()/k;                 // units per CSS px, half-side (CSS px)
+  const scx=sr.left+sr.width/2, scy=sr.top+sr.height/2;
+  const L=Math.max(0,Math.floor(scx-half)), Tp=Math.max(0,Math.floor(scy-half));
+  const Wc=Math.max(1,Math.min(vw,Math.ceil(scx+half))-L), Hc=Math.max(1,Math.min(vh,Math.ceil(scy+half))-Tp);
+  const st=cv.style; st.left=L+'px'; st.top=Tp+'px'; st.width=Wc+'px'; st.height=Hc+'px';
+  dpr=Math.min(window.devicePixelRatio||1,2)*rscale;                    // DPR capped at 2× (× adaptive scale)
+  W=Math.max(1,Math.round(Wc*dpr)); H=Math.max(1,Math.round(Hc*dpr));
   if(cv.width!==W||cv.height!==H){cv.width=W;cv.height=H;}
   gl.viewport(0,0,W,H);
-  // map 340 units to the CSS stage exactly, centred on the stage (pointer hitbox == drawn orb)
-  const sx=W/Math.max(1,cr.width), sy=H/Math.max(1,cr.height), S=Math.max(1,sr.width*sx);
-  gl.uniform3f(U.uView,(sr.left-cr.left+sr.width/2)*sx,H-(sr.top-cr.top+sr.height/2)*sy,340/S);
+  // clip → units (y down): p = C + (cssPixel − stageCentre)·k
+  gl.uniform4f(U.uVS,120+(L+Wc/2-scx)*k,120+(Tp+Hc/2-scy)*k,Wc/2*k,-Hc/2*k);
 }
 addEventListener('resize',()=>{needResize=true;});
 if(window.ResizeObserver) new ResizeObserver(()=>{needResize=true;}).observe(stage);
@@ -338,7 +396,7 @@ if(!state||typeof state!=='object'||!names.includes(state.name)) state={name:'gl
 state={name:state.name,dark:!!state.dark};
 if(qCoat&&names.includes(qCoat)) state.name=qCoat;
 if(qMode) state.dark=qMode==='dark';
-const themeMeta=document.querySelector('meta[name=theme-color]');
+const themeMeta=document.querySelector('meta[name=theme-color]'); let coatDark=0;
 function applyCoat(name,dark,persist){
   const p=palette(name,dark);
   document.documentElement.style.setProperty('--paper',p.paper);
@@ -349,7 +407,13 @@ function applyCoat(name,dark,persist){
     c3('uPaper',p.paper);c3('uCore',p.core);c3('uDeep',p.deep);c3('uMid',p.mid);c3('uEdge',p.edge);c3('uHalo',p.halo);
     c3('uEye',p.eye);c3('uEyeHi',p.eyeHi);c3('uEyeLo',p.eyeLo);c3('uGlow',p.glow);
     gl.uniform2f(U.uMode,p.inner,p.dark);
+    // derived colours that used to be mixed per pixel
+    const mx=(a,b,t)=>a.map((v,i)=>v+(b[i]-v)*t), CY_=[.560,.905,1.0];
+    const mid=rgb(p.mid), edge=rgb(p.edge), core=rgb(p.core), halo=rgb(p.halo), glow=rgb(p.glow);
+    gl.uniform3fv(U.uBloomCol,mx(mid,edge,.35)); gl.uniform3fv(U.uLiftCol,mx(mid,CY_,.45)); gl.uniform3fv(U.uTouchCol,mx(halo,glow,p.dark));
+    const au=mx(core,mid,.3); gl.uniform4f(U.uAura,au[0],au[1],au[2],.42*(1-.4*p.dark));
   }
+  coatDark=palette(name,dark).dark;
   if(persist!==false) store.set('astridCoat',JSON.stringify({name,dark}));
   document.querySelectorAll('.coats button[data-c]').forEach(b=>b.setAttribute('aria-pressed',b.dataset.c===name));
   $('modeBtn').textContent=dark?'Dark':'Light';
@@ -438,7 +502,8 @@ document.addEventListener('visibilitychange',()=>document.hidden?Voice.suspend()
 /* ---------------- pose + glass state ---------------- */
 const yaw=spring(0,.07,.74), pitch=spring(0,.07,.74), size=spring(1,.16,.62), lid=spring(1,.45,.5);
 const gYaw=spring(0,T.gk,T.gd), gPitch=spring(0,T.gk,T.gd);
-const hist=[];   // {t,y,p} pose history for the glass lag (bounded by T.lag)
+/* pose history for the glass lag: preallocated ring (no per-tick allocation). 64 ticks > 400 ms max lag */
+const HN=64, hT=new Float64Array(HN), hY=new Float64Array(HN), hP=new Float64Array(HN); let h0=0, hLen=0;
 /* blob drift: random targets on very soft springs (no sine) — floor, pool, bloom */
 const mkDrift=amp=>({amp,x:spring(0,.006,.9),y:spring(0,.006,.9),sx:spring(1,.006,.9),sy:spring(1,.006,.9),r:spring(0,.005,.9),next:0});
 const drifts=[mkDrift({t:5,s:.1,r:10}),mkDrift({t:7,s:.16,r:14}),mkDrift({t:11,s:.3,r:40})];
@@ -456,20 +521,21 @@ const rmq=window.matchMedia?matchMedia('(prefers-reduced-motion: reduce)'):null;
 let RM=!!(rmq&&rmq.matches);
 if(rmq) (rmq.addEventListener?rmq.addEventListener('change',e=>RM=e.matches):rmq.addListener(e=>RM=e.matches));
 
-let pointerAt=-1e9, simT=0, nextGlance=1800+Math.random()*2600, nextBlink=2800+Math.random()*3400, blinkUntil=-1, doubleAt=-1;
-let noiseT=0, prevNT=0;
+/* per-frame doubles live on one object (fields update in place; a closure `let` would box a new number per write) */
+const CK={simT:.5,noiseT:.5,prevNT:.5,last:.5,acc:.5,alpha:.5,pointerAt:.5}; CK.simT=CK.noiseT=CK.prevNT=CK.last=CK.acc=CK.alpha=0; CK.pointerAt=-1e9;
+let nextGlance=1800+Math.random()*2600, nextBlink=2800+Math.random()*3400, blinkUntil=-1, doubleAt=-1;
 function aim(ev){
   if(forced) return;
-  const r=stage.getBoundingClientRect();
-  const dx=(ev.clientX-(r.left+r.width/2))/(r.width/2), dy=(ev.clientY-(r.top+r.height/2))/(r.height/2);
-  yaw.t=Math.max(-1,Math.min(1,dx))*.5; pitch.t=Math.max(-1,Math.min(1,dy))*.34; pointerAt=simT;
+  if(needResize) stageRect();                                    // layout changed since the last frame
+  const dx=(ev.clientX-(SR.l+SR.w/2))/(SR.w/2), dy=(ev.clientY-(SR.t+SR.h/2))/(SR.h/2);
+  yaw.t=Math.max(-1,Math.min(1,dx))*.5; pitch.t=Math.max(-1,Math.min(1,dy))*.34; CK.pointerAt=CK.simT;
 }
 addEventListener('pointermove',aim,{passive:true});
 addEventListener('pointerdown',aim,{passive:true});          // touch has no hover: a touch aims too
 const lookHome=()=>{ if(!forced){yaw.t=0;pitch.t=0;} };       // pointer left the window → eyes come home
 document.addEventListener('pointerout',e=>{ if(!e.relatedTarget&&e.pointerType==='mouse') lookHome(); },{passive:true});
 addEventListener('blur',lookHome);
-const blink=(ms)=>{blinkUntil=Math.max(blinkUntil,simT+(ms||110));};
+const blink=(ms)=>{blinkUntil=Math.max(blinkUntil,CK.simT+(ms||110));};
 const tap=()=>{size.v+=.09; blink();};
 stage.addEventListener('keydown',e=>{ if(e.key==='Enter'||e.key===' '){e.preventDefault();Voice.unlock();tap();} });
 const R_HIT=128;
@@ -481,13 +547,14 @@ const roll=spring(0,.12,.7), happy=spring(0,.06,.8);             // face: tickle
 const press=spring(0,.14,.62), tX=spring(120,.3,.55), tY=spring(120,.3,.55);   // contact: pressure + spot
 const dragX=spring(0,T.gk,T.gd), dragY=spring(0,T.gk,T.gd);      // pool pulled along the stroke (glass lag)
 const bodyA=spring(0,.1,.8);                                     // squash/stretch amount (wobbles on release)
-ALL.push(roll,happy,press,tX,tY,dragX,dragY,bodyA);
+const PET_SPRINGS=[roll,happy,press,tX,tY,dragX,dragY,bodyA]; ALL.push(...PET_SPRINGS);
 const pet={down:false,id:-1,in:false,x:120,y:120,px:120,py:120,vx:0,vy:0,dx:1,dy:0,path:0,downAt:0,
            lx:0,ly:0,revs:[],lastCalm:-1e9,lastTickle:-1e9,content:0,nextChirp:0,bx:1,by:0};
 const qContent=Q.has('content')?Math.max(0,Math.min(1,+Q.get('content')||0)):null;   // test hook: pin content
 const blinkQ=[], kickQ=[];
-const toUnits=e=>{const r=stage.getBoundingClientRect(), k=340/r.width;
-  return {x:120+(e.clientX-(r.left+r.width/2))*k, y:120+(e.clientY-(r.top+r.height/2))*k};};
+const UPT={x:0,y:0};
+const toUnits=e=>{if(needResize) stageRect(); const k=340/SR.w;
+  UPT.x=120+(e.clientX-(SR.l+SR.w/2))*k; UPT.y=120+(e.clientY-(SR.t+SR.h/2))*k; return UPT;};
 let suppressClick=false;
 stage.addEventListener('pointerdown',e=>{
   if(e.button>0||forced) return;
@@ -495,17 +562,17 @@ stage.addEventListener('pointerdown',e=>{
   const u=toUnits(e);
   try{stage.setPointerCapture(e.pointerId);}catch(_){}
   e.preventDefault();                                            // no text selection / emulated mouse / scroll
-  Object.assign(pet,{down:true,id:e.pointerId,x:u.x,y:u.y,px:u.x,py:u.y,lx:0,ly:0,path:0,downAt:simT});
+  Object.assign(pet,{down:true,id:e.pointerId,x:u.x,y:u.y,px:u.x,py:u.y,lx:0,ly:0,path:0,downAt:CK.simT});
   pet.revs.length=0;
 });
 stage.addEventListener('pointermove',e=>{
   if(!pet.down||e.pointerId!==pet.id) return;
-  const u=toUnits(e); pet.path+=Math.hypot(u.x-pet.x,u.y-pet.y); pet.x=u.x; pet.y=u.y;
+  const u=toUnits(e), ddx=u.x-pet.x, ddy=u.y-pet.y; pet.path+=Math.sqrt(ddx*ddx+ddy*ddy); pet.x=u.x; pet.y=u.y;
 },{passive:true});
 const petEnd=e=>{
   if(!pet.down||(e&&e.pointerId!==pet.id)) return;
   pet.down=false;
-  if(simT-pet.downAt<260&&pet.path<6) tap();                    // a short tap keeps the old tap reaction
+  if(CK.simT-pet.downAt<260&&pet.path<6) tap();                    // a short tap keeps the old tap reaction
 };
 stage.addEventListener('pointerup',petEnd); stage.addEventListener('pointercancel',petEnd);
 stage.addEventListener('lostpointercapture',petEnd);
@@ -513,43 +580,43 @@ stage.addEventListener('click',()=>{ if(suppressClick){suppressClick=false;retur
 stage.addEventListener('contextmenu',e=>{ if(pet.down) e.preventDefault(); });
 
 function tickle(){
-  const fresh=simT-pet.lastTickle>1200;                          // first tickle of a scrub gets the full burst
-  pet.lastTickle=simT; pet.content=Math.min(1,pet.content+.06);
+  const fresh=CK.simT-pet.lastTickle>1200;                          // first tickle of a scrub gets the full burst
+  pet.lastTickle=CK.simT; pet.content=Math.min(1,pet.content+.06);
   const sg=Math.random()<.5?-1:1;
-  [0,85,170].forEach((t,i)=>kickQ.push({t:simT+t,s:(i%2?-sg:sg)*(i===2?.6:1)}));   // quick wiggle
-  (fresh?[0,160,320]:[0]).forEach(t=>blinkQ.push(simT+t));                            // blink burst (short blinks)
+  [0,85,170].forEach((t,i)=>kickQ.push({t:CK.simT+t,s:(i%2?-sg:sg)*(i===2?.6:1)}));   // quick wiggle
+  (fresh?[0,160,320]:[0]).forEach(t=>blinkQ.push(CK.simT+t));                            // blink burst (short blinks)
   bodyA.v+=.02;
   Voice.giggle();
 }
 function petTick(dt){
-  const P=pet, inOrb=Math.hypot(P.x-120,P.y-120)<R_HIT;
+  const P=pet, ex=P.x-120, ey=P.y-120, inOrb=ex*ex+ey*ey<R_HIT*R_HIT;
   let rsp=0;
   if(P.down){
     const mx=P.x-P.px, my=P.y-P.py; P.px=P.x; P.py=P.y;
-    const vx=mx*1000/dt, vy=my*1000/dt; rsp=Math.hypot(vx,vy);
+    const vx=mx*1000/dt, vy=my*1000/dt; rsp=Math.sqrt(vx*vx+vy*vy);
     P.vx+=(vx-P.vx)*.35; P.vy+=(vy-P.vy)*.35;
     // direction reversals (scrubbing): raw step direction flips against the last stroke direction
     if(rsp>150&&inOrb){
       const ux=vx/rsp, uy=vy/rsp;
-      if(ux*P.lx+uy*P.ly<-.2) P.revs.push(simT);
+      if(ux*P.lx+uy*P.ly<-.2) P.revs.push(CK.simT);
       P.lx=ux; P.ly=uy;
     }
   } else { P.vx*=.8; P.vy*=.8; }
-  while(P.revs.length&&P.revs[0]<simT-700) P.revs.shift();
-  const sp=Math.hypot(P.vx,P.vy);
+  while(P.revs.length&&P.revs[0]<CK.simT-700) P.revs.shift();
+  const sp=Math.sqrt(P.vx*P.vx+P.vy*P.vy);
   if(sp>60){ P.bx=P.vx/sp; P.by=P.vy/sp; }
   const stroking=P.down&&inOrb;
   // speed bands
-  if(stroking&&simT-P.downAt>100&&(sp>T.tickle||P.revs.length>=3)){
-    if(simT-P.lastTickle>450) tickle();
+  if(stroking&&CK.simT-P.downAt>100&&(sp>T.tickle||P.revs.length>=3)){
+    if(CK.simT-P.lastTickle>450) tickle();
   } else if(stroking&&sp>25&&sp<Math.min(T.tickle*.6,560)){
     const gentle=Math.min(1,(sp-25)/90)*(1-Math.max(0,(sp-320)/(Math.min(T.tickle*.6,560)-320+1e-3))*.6);
     P.content=Math.min(1,P.content+.42*T.cBuild*gentle*dt/1000);
-    P.lastCalm=simT;
-    if(P.content>.12&&simT>=P.nextChirp){ Voice.chirp(P.content); P.nextChirp=simT+1100+Math.random()*700; }
+    P.lastCalm=CK.simT;
+    if(P.content>.12&&CK.simT>=P.nextChirp){ Voice.chirp(P.content); P.nextChirp=CK.simT+1100+Math.random()*700; }
   }
   // afterglow: hold the happy face ~1.5 s after the last stroke, then decay back to rest life
-  if(simT-Math.max(P.lastCalm,P.lastTickle)>1500) P.content=Math.max(0,P.content-.35*T.cDecay*dt/1000);
+  if(CK.simT-Math.max(P.lastCalm,P.lastTickle)>1500) P.content=Math.max(0,P.content-.35*T.cDecay*dt/1000);
   if(qContent!==null) P.content=qContent;
   happy.t=P.content;
   // contact + pool drag + body
@@ -559,82 +626,116 @@ function petTick(dt){
   const lim=40, pk=.05*T.pull;
   dragX.t=stroking?Math.max(-lim,Math.min(lim,P.vx*pk)):0; dragY.t=stroking?Math.max(-lim,Math.min(lim,P.vy*pk)):0;
   bodyA.t=stroking?Math.min(1,sp/700)*.07:0;
-  while(kickQ.length&&kickQ[0].t<=simT){const k=kickQ.shift(); yaw.v+=.07*k.s; roll.v+=.09*k.s;}
-  while(blinkQ.length&&blinkQ[0]<=simT){blinkQ.shift(); blink(70);}
-  [roll,happy,press,tX,tY,dragX,dragY,bodyA].forEach(step);
+  while(kickQ.length&&kickQ[0].t<=CK.simT){const k=kickQ.shift(); yaw.v+=.07*k.s; roll.v+=.09*k.s;}
+  while(blinkQ.length&&blinkQ[0]<=CK.simT){blinkQ.shift(); blink(70);}
+  for(let i=0;i<PET_SPRINGS.length;i++) step(PET_SPRINGS[i]);
 }
 
 function tick(){            // one fixed 60 Hz step of the whole motion model
-  ALL.forEach(save); prevNT=noiseT;
-  const dt=STEP; simT+=dt;
+  for(let i=0;i<ALL.length;i++) save(ALL[i]); CK.prevNT=CK.noiseT;
+  const dt=STEP; CK.simT+=dt;
   if(!forced&&!still){
-    if(simT>=nextGlance){
-      if(!RM&&simT-pointerAt>2500&&happy.x<.15&&!pet.down){const home=Math.random()<.45; yaw.t=home?0:(Math.random()*2-1)*.36; pitch.t=home?0:(Math.random()*2-1)*.2;}
-      nextGlance=simT+1800+Math.random()*2600;
+    if(CK.simT>=nextGlance){
+      if(!RM&&CK.simT-CK.pointerAt>2500&&happy.x<.15&&!pet.down){const home=Math.random()<.45; yaw.t=home?0:(Math.random()*2-1)*.36; pitch.t=home?0:(Math.random()*2-1)*.2;}
+      nextGlance=CK.simT+1800+Math.random()*2600;
     }
-    if(simT>=nextBlink){ blink(); if(Math.random()<.18) doubleAt=simT+260; nextBlink=simT+2800+Math.random()*3400; }
-    if(doubleAt>0&&simT>=doubleAt){ blink(); doubleAt=-1; }
+    if(CK.simT>=nextBlink){ blink(); if(Math.random()<.18) doubleAt=CK.simT+260; nextBlink=CK.simT+2800+Math.random()*3400; }
+    if(doubleAt>0&&CK.simT>=doubleAt){ blink(); doubleAt=-1; }
   }
   petTick(dt);
   // happy eyes: lid comes down with content → the stadium shortens toward (never past) a circle
-  lid.t=simT<blinkUntil?0:1-.5*Math.max(0,Math.min(1,happy.x));
+  lid.t=CK.simT<blinkUntil?0:1-.5*Math.max(0,Math.min(1,happy.x));
   step(yaw);step(pitch);step(size);step(lid);
   // glass follows the pose from LAG ms ago on a heavier, softer spring (eyes lead)
-  hist.push({t:simT,y:yaw.x,p:pitch.x});
-  while(hist.length>1&&hist[1].t<=simT-T.lag) hist.shift();
+  if(hLen===HN){h0=(h0+1)%HN;hLen--;}
+  const hi=(h0+hLen)%HN; hT[hi]=CK.simT; hY[hi]=yaw.x; hP[hi]=pitch.x; hLen++;
+  while(hLen>1&&hT[(h0+1)%HN]<=CK.simT-T.lag){h0=(h0+1)%HN;hLen--;}
   gYaw.k=gPitch.k=T.gk; gYaw.d=gPitch.d=T.gd;
-  if(!forced){ gYaw.t=hist[0].y; gPitch.t=hist[0].p; step(gYaw); step(gPitch); }
+  if(!forced){ gYaw.t=hY[h0]; gPitch.t=hP[h0]; step(gYaw); step(gPitch); }
   if(!still){
     const sp=T.dSpeed*(RM?.3:1);
-    drifts.forEach(d=>{
-      if(simT>d.next){
+    for(let di=0;di<3;di++){ const d=drifts[di];
+      if(CK.simT>d.next){
         const A=d.amp, m=T.dAmt;
         d.x.t=(Math.random()*2-1)*A.t*m; d.y.t=(Math.random()*2-1)*A.t*.8*m;
         d.sx.t=1+(Math.random()*2-1)*A.s*m; d.sy.t=1+(Math.random()*2-1)*A.s*m; d.r.t=(Math.random()*2-1)*A.r*m;
-        d.next=simT+(2600+Math.random()*3200)/Math.max(.05,sp);
+        d.next=CK.simT+(2600+Math.random()*3200)/Math.max(.05,sp);
       }
       stepScaled(d.x,sp);stepScaled(d.y,sp);stepScaled(d.sx,sp);stepScaled(d.sy,sp);stepScaled(d.r,sp);
-    });
-    noiseT+=dt/1000*sp;
-    if(noiseT>=NT_WRAP){noiseT-=NT_WRAP; prevNT-=NT_WRAP;}   // seamless (periodic noise)
+    }
+    CK.noiseT+=dt/1000*sp;
+    if(CK.noiseT>=NT_WRAP){CK.noiseT-=NT_WRAP; CK.prevNT-=NT_WRAP;}   // seamless (periodic noise)
   }
 }
-const m2=new Float32Array(4);
+const EYE={hw:.5,cap:.5,fade:.5}, PA={x:.5,y:.5,z:.5}, PB={x:.5,y:.5,z:.5}, PJ=new Float64Array(8), EV=new Float64Array(2);
+/* uniform staging: preallocated Float32Arrays + uniform*fv. Passing doubles straight to gl.uniform4f boxes
+   each argument (a heap number per value per frame); writing into typed arrays doesn't allocate at all. */
+const F32=n=>new Float32Array(n);
+const vRot=F32(4), vFace=F32(4), vEyeP=F32(4), vEyeL=F32(4), vEyeR=F32(4), vEyeK=F32(4), vEyeK2=F32(4), vQ=F32(4),
+      vFrost=F32(4), vPoolK=F32(4), vFringeK=F32(4), vMisc=F32(4), vTouch=F32(4), vNT=F32(1), vWarp=F32(1), mBody=F32(4),
+      mBlob=[F32(4),F32(4),F32(4)], vBlobC=[F32(2),F32(2),F32(2)];
+const LOG2E=Math.LOG2E, gk=w=>-LOG2E/(w*w);                 // gauss(x,w)=exp2(x²·gk(w))
+/* blob table (floor, pool, bloom): centre + radii; radii.y may depend on pool height ph */
+const BLOB_C=[[108,186],[120,222],[140,128]];
+const blobR=(i,ph)=>i===0?56*(1+(ph-1)*.5):i===1?196*ph:52, BLOB_RX=[82,136,70];
 
-/* a ∈ [0,1): how far into the next 60 Hz step this frame is → interpolated, so 120 Hz is smooth */
-function pushUniforms(a){
-  const Y=at(yaw,a), P=at(pitch,a), gy=at(gYaw,a), gp=at(gPitch,a);
-  const cy=Math.cos(Y),sy=Math.sin(Y),cp=Math.cos(P),sp=Math.sin(P);
-  gl.uniform4f(U.uRot,cy,sy,cp,sp);
-  const Rl=at(roll,a), hp=Math.max(0,Math.min(1,at(happy,a))), lift=.035*hp;
-  gl.uniform4f(U.uFace,Math.cos(Rl),Math.sin(Rl),lift,.15*hp);
-  const e=F.eyeUniforms(at(size,a)*T.eyeScale,at(lid,a)), xf=F.projector(Y,P,Rl);   // stadiumOf keeps it ≥ a circle
-  const cl=xf(-F.REST.lon,F.REST.lat+lift), cr=xf(F.REST.lon,F.REST.lat+lift);
-  gl.uniform4f(U.uEyeP,e.hw,e.cap,e.fade,(e.hw+e.cap)*RR+24+8*T.eyeSoft+4*T.split);
-  gl.uniform4f(U.uEyeC,cl.x,cl.y,cr.x,cr.y);
-  // head turn: INVERTED to the gaze, foreshortened at the side
+/* CK.alpha = a ∈ [0,1): how far into the next 60 Hz step this frame is → interpolated, so 120 Hz is smooth.
+   Everything constant across the frame is computed here, not per pixel. No allocations (verified with
+   the CDP heap sampler: see bench notes). */
+function pushUniforms(){
+  const a=CK.alpha;
+  const Y=at(yaw,a), P=at(pitch,a), gy=at(gYaw,a), gp=at(gPitch,a), Rl=at(roll,a);
+  const cy=Math.cos(Y),sy=Math.sin(Y),cp=Math.cos(P),sp=Math.sin(P),cr=Math.cos(Rl),sr=Math.sin(Rl);
+  vRot[0]=cy; vRot[1]=sy; vRot[2]=cp; vRot[3]=sp; gl.uniform4fv(U.uRot,vRot);
+  vFace[0]=cr; vFace[1]=sr; gl.uniform4fv(U.uFace,vFace);
+  // eyes: stadium (stadiumOf keeps it ≥ a circle) + happy lift/arc + every slider-derived constant
+  const hp=Math.max(0,Math.min(1,at(happy,a))), lift=.035*hp, arc=.15*hp;
+  EV[0]=at(size,a)*T.eyeScale; EV[1]=at(lid,a); F.eyeV(EYE,EV);
+  const w=.8*T.eyeSoft+.4, ihw=1/Math.max(EYE.hw,1e-4);
+  /* tight bounding capsule per eye: the projected stadium axis (cap ends) + radius. Projection never
+     enlarges distances (screen ≤ RR·angle), the meridian's bow is < 1u, the happy arc droops ≤ arc·hw,
+     and the margin is where glow + aura fall under ~0.5/255 (ds ≥ 0.8·screen distance near the limb). */
+  const lat0=F.REST.lat+lift, mg=(1.5+2.4*(3.5+2.5*w))/.8;
+  vEyeP[0]=EYE.hw; vEyeP[1]=EYE.cap; vEyeP[2]=EYE.fade; vEyeP[3]=(EYE.hw+arc*EYE.hw)*RR+1+mg; gl.uniform4fv(U.uEyeP,vEyeP);
+  PJ[0]=cy; PJ[1]=sy; PJ[2]=cp; PJ[3]=sp; PJ[4]=cr; PJ[5]=sr;
+  for(let s2=-1;s2<=1;s2+=2){
+    PJ[6]=s2*F.REST.lon; PJ[7]=lat0+EYE.cap; F.projectV(PA,PJ); PJ[7]=lat0-EYE.cap; F.projectV(PB,PJ);
+    const v=s2<0?vEyeL:vEyeR; v[0]=PA.x; v[1]=PA.y; v[2]=PB.x; v[3]=PB.y; gl.uniform4fv(s2<0?U.uEyeL:U.uEyeR,v);
+  }
+  vEyeK[0]=w; vEyeK[1]=gk(4+3*w); vEyeK[2]=gk(3.5+2.5*w); vEyeK[3]=ihw; gl.uniform4fv(U.uEyeK,vEyeK);
+  vEyeK2[0]=1/(2*(EYE.cap+EYE.hw)+1e-4); vEyeK2[1]=-EYE.hw*RR*.7; vEyeK2[2]=.04+lift; vEyeK2[3]=arc*ihw; gl.uniform4fv(U.uEyeK2,vEyeK2);
+  // head turn: INVERTED to the gaze, foreshortened at the side, plus the petting drag → q = pl·xy + zw
   const gsy=Math.sin(gy), gsp=Math.sin(gp), k=RR*T.follow;
-  gl.uniform4f(U.uCoreM,-gsy*k+at(dragX,a),-gsp*Math.cos(gy)*k+at(dragY,a),1-.16*Math.abs(gsy),1-.16*Math.abs(gsp));
+  const ox=-gsy*k+at(dragX,a), oy=-gsp*Math.cos(gy)*k+at(dragY,a), isx=1/(1-.16*Math.abs(gsy)), isy=1/(1-.16*Math.abs(gsp));
+  vQ[0]=isx; vQ[1]=isy; vQ[2]=120-(120+ox)*isx; vQ[3]=120-(120+oy)*isy; gl.uniform4fv(U.uQ,vQ);
+  // blobs: drift⁻¹ (rotate·scale about the drift origin + translate) with 1/radii folded in
+  const ph=T.poolH;
+  for(let i=0;i<3;i++){
+    const d=drifts[i], ang=at(d.r,a)*Math.PI/180, c=Math.cos(ang), s=Math.sin(ang), ix=1/at(d.sx,a), iy=1/at(d.sy,a);
+    const otx=120+at(d.x,a)*BOX, oty=144.8+at(d.y,a)*BOX, rx=1/BLOB_RX[i], ry=1/blobR(i,ph);
+    const a0=c*ix, a1=-s*iy, a2=s*ix, a3=c*iy;                // column-major M⁻¹
+    const m=mBlob[i], cv2=vBlobC[i];
+    m[0]=a0*rx; m[1]=a1*ry; m[2]=a2*rx; m[3]=a3*ry;
+    gl.uniformMatrix2fv(i===0?U.uBA:i===1?U.uBB:U.uBC,false,m);
+    cv2[0]=(120-BLOB_C[i][0]-(a0*otx+a2*oty))*rx; cv2[1]=(144.8-BLOB_C[i][1]-(a1*otx+a3*oty))*ry;
+    gl.uniform2fv(i===0?U.uCA:i===1?U.uCB:U.uCC,cv2);
+  }
+  const ck=CK; vNT[0]=ck.prevNT+(ck.noiseT-ck.prevNT)*a; gl.uniform1fv(U.uNT,vNT);
+  vWarp[0]=6*T.dAmt; gl.uniform1fv(U.uWarp,vWarp);
+  const es=T.edge;
+  vFrost[0]=gk(10*es+3); vFrost[1]=118-6*es-1; vFrost[2]=118+5*es+1; vFrost[3]=Math.max(118-4+2.5*(10*es+3),118+12); gl.uniform4fv(U.uFrost,vFrost);
+  vPoolK[0]=30*es; vPoolK[1]=14*es; vPoolK[2]=10*es; vPoolK[3]=6*es+2; gl.uniform4fv(U.uPoolK,vPoolK);
+  vFringeK[0]=gk(5*es+2.5); vFringeK[1]=gk(4+3*es); vFringeK[2]=T.fringe; vFringeK[3]=T.haze; gl.uniform4fv(U.uFringeK,vFringeK);
+  vMisc[0]=T.poolI; vMisc[1]=T.split*(1-.3*coatDark); vMisc[2]=gk(34); vMisc[3]=T.dent; gl.uniform4fv(U.uMisc,vMisc);
   // petting: contact (pressure sprung in/out) + squash/stretch along the stroke, inverse matrix
-  gl.uniform4f(U.uTouch,at(tX,a),at(tY,a),Math.max(0,at(press,a)),T.dent);
+  vTouch[0]=at(tX,a); vTouch[1]=at(tY,a); vTouch[2]=Math.max(0,at(press,a)); gl.uniform4fv(U.uTouch,vTouch);
   const ba=at(bodyA,a), ux=pet.bx, uy=pet.by, sa=1/(1+ba), sb=1/Math.max(.5,1-.6*ba);   // stretch along, squash across
-  m2[0]=sa*ux*ux+sb*uy*uy; m2[1]=(sa-sb)*ux*uy; m2[2]=m2[1]; m2[3]=sa*uy*uy+sb*ux*ux;
-  gl.uniformMatrix2fv(U.uBodyM,false,m2);
-  // blob drift → inverse affine per blob: M⁻¹ = S⁻¹·R(−r) (column-major mat2), origin+translate
-  const bm=[U.uMA,U.uMB,U.uMC], bt=[U.uTA,U.uTB,U.uTC];
-  drifts.forEach((d,i)=>{
-    const ang=at(d.r,a)*Math.PI/180, c=Math.cos(ang), s=Math.sin(ang), ix=1/at(d.sx,a), iy=1/at(d.sy,a);
-    m2[0]=c*ix; m2[1]=-s*iy; m2[2]=s*ix; m2[3]=c*iy;
-    gl.uniformMatrix2fv(bm[i],false,m2);
-    gl.uniform2f(bt[i],120+at(d.x,a)*BOX,144.8+at(d.y,a)*BOX);
-  });
-  gl.uniform1f(U.uNT,prevNT+(noiseT-prevNT)*a);
-  gl.uniform4f(U.uTune1,T.split,T.edge,T.haze,T.poolH);
-  gl.uniform4f(U.uTune2,T.eyeSoft,T.fringe,6*T.dAmt,T.poolI);
+  mBody[0]=sa*ux*ux+sb*uy*uy; mBody[1]=(sa-sb)*ux*uy; mBody[2]=mBody[1]; mBody[3]=sa*uy*uy+sb*ux*ux;
+  gl.uniformMatrix2fv(U.uBodyM,false,mBody);
 }
 
 /* ---------------- single rAF loop (paused when hidden or context lost) ---------------- */
-let raf=0,last=0,acc=0,fpsN=0,fpsT=0,fps=0;
+let raf=0,fpsN=0,fpsT=0,fps=0;
 /* adaptive quality: 3 slow windows (<52 fps) → try 85% resolution. If that doesn't buy ≥8% fps the
    limit is vsync (30 Hz screens, iOS Low Power) or CPU, so undo it and stop adapting. Never climbs back. */
 const adapt=!Q.has('noadapt'); let slow=0, probe=null, adaptOff=!adapt, windows=0;
@@ -652,18 +753,18 @@ function frame(now){
   raf=requestAnimationFrame(frame);
   if(lost) return;
   if(needResize) resize();
-  if(!last) last=now;
-  acc+=Math.min(now-last,100); last=now;
-  let n=0; while(acc>=STEP&&n<6){tick();acc-=STEP;n++;}
-  if(acc>=STEP) acc=0;                                       // fell far behind: drop, don't spiral
-  pushUniforms(acc/STEP);
-  gl.drawArrays(gl.TRIANGLES,0,3);
+  const c=CK; if(!c.last) c.last=now;
+  c.acc+=Math.min(now-c.last,100); c.last=now;
+  let n=0; while(c.acc>=STEP&&n<6){tick();c.acc-=STEP;n++;}
+  if(c.acc>=STEP) c.acc=0;                                   // fell far behind: drop, don't spiral
+  c.alpha=c.acc/STEP; pushUniforms();
+  draw();
   fpsN++; if(now-fpsT>=500){
     fps=fpsN*1000/(now-fpsT);fpsN=0;fpsT=now; adaptStep();
     if(fpsEl&&dbg.classList.contains('on')) fpsEl.textContent=fps.toFixed(0)+' fps · '+W+'×'+H+(rscale<1?' · '+Math.round(rscale*100)+'%':'');
   }
 }
-function start(){ if(!raf&&!lost&&!document.hidden){last=0;acc=0;fpsN=0;fpsT=performance.now();slow=0;probe=null;raf=requestAnimationFrame(frame);} }
+function start(){ if(!raf&&!lost&&!document.hidden){CK.last=0;CK.acc=0;fpsN=0;fpsT=performance.now();slow=0;probe=null;raf=requestAnimationFrame(frame);} }
 function stop(){ if(raf){cancelAnimationFrame(raf);raf=0;} }
 document.addEventListener('visibilitychange',()=>document.hidden?stop():start());
 cv.addEventListener('webglcontextlost',e=>{ e.preventDefault(); lost=true; stop(); },false);
@@ -683,13 +784,13 @@ function buildDebug(){
     const inp=l.querySelector('input'), val=l.querySelectorAll('span')[1];
     const show=()=>{val.textContent=(+T[key]).toFixed(st<.01?3:st<1?2:0);};
     inp.value=T[key]; show();
-    inp.oninput=()=>{T[key]=+inp.value; show(); store.set(TUNE_KEY,JSON.stringify(T));};
+    inp.oninput=()=>{T[key]=+inp.value; show(); store.set(TUNE_KEY,JSON.stringify(T)); if(key==='edge') needResize=true;};
     l.dataset.k=key; dbg.appendChild(l);
   });
   const row=document.createElement('div'); row.className='row';
   row.innerHTML='<button type="button" id="dReset">Reset</button><button type="button" id="dCopy">Copy values</button>';
   dbg.appendChild(row);
-  $('dReset').onclick=()=>{T=Object.assign({},TUNE_DEF);store.del(TUNE_KEY);buildDebug();};
+  $('dReset').onclick=()=>{T=Object.assign({},TUNE_DEF);store.del(TUNE_KEY);buildDebug();needResize=true;};
   $('dCopy').onclick=()=>{
     const txt=JSON.stringify(T,null,2), btn=$('dCopy');
     const ok=()=>{btn.textContent='Copied ✓';setTimeout(()=>btn.textContent='Copy values',1200);};
@@ -714,11 +815,24 @@ addEventListener('keydown',e=>{
 
 resize();
 applyCoat(state.name,state.dark,!(qCoat||qMode));
-start();
+if(!Q.has('seed')) start();   // seed = scripted test mode: static until __astrid.drive()
 /* bench: n synchronous draws with a 1-px readback → ms per frame (renderer cost only) */
-function bench(n){n=n||60;const was=!!raf;stop();pushUniforms(0);gl.drawArrays(gl.TRIANGLES,0,3);gl.finish();const t0=performance.now();
-  const px=new Uint8Array(4);for(let i=0;i<n;i++){tick();pushUniforms(0);gl.drawArrays(gl.TRIANGLES,0,3);gl.readPixels(0,0,1,1,gl.RGBA,gl.UNSIGNED_BYTE,px);} const ms=(performance.now()-t0)/n; if(was)start(); return ms;}
-window.__astrid={pet:()=>({down:pet.down,content:pet.content,happy:happy.x,lid:lid.x,roll:roll.x,press:press.x,body:bodyA.x,revs:pet.revs.length,lastTickle:pet.lastTickle,simT,voice:Voice.stats()}),bench,get T(){return T},state:()=>state,pose:()=>({yaw:yaw.x,pitch:pitch.x,size:size.x,lid:lid.x,gYaw:gYaw.x,gPitch:gPitch.x}),fps:()=>fps,rscale:()=>rscale};
+function bench(n){n=n||60;const was=!!raf;stop();(CK.alpha=0,pushUniforms());draw();gl.finish();const t0=performance.now();
+  const px=new Uint8Array(4);for(let i=0;i<n;i++){tick();(CK.alpha=0,pushUniforms());draw();gl.readPixels(0,0,1,1,gl.RGBA,gl.UNSIGNED_BYTE,px);} const ms=(performance.now()-t0)/n; if(was)start(); return ms;}
+/* test hook: drive(steps) runs the real 60 Hz sim with scripted pointer input, one [down,x,y] (units) per
+   tick, then draws once. Deterministic with ?seed. Used to compare frames pixel-for-pixel across builds. */
+function drive(steps){
+  stop(); const cl=v=>Math.max(-1,Math.min(1,v));
+  for(let i=0;i<steps.length;i++){
+    const dn=steps[i][0], x=steps[i][1], y=steps[i][2];
+    if(dn&&!pet.down){ Object.assign(pet,{down:true,id:-2,x,y,px:x,py:y,lx:0,ly:0,path:0,downAt:CK.simT}); pet.revs.length=0; }
+    else if(!dn&&pet.down) pet.down=false;
+    if(dn){ pet.path+=Math.hypot(x-pet.x,y-pet.y); pet.x=x; pet.y=y; yaw.t=cl((x-120)/170)*.5; pitch.t=cl((y-120)/170)*.34; CK.pointerAt=CK.simT; }
+    tick();
+  }
+  return new Promise(res=>requestAnimationFrame(()=>{ if(needResize) resize(); (CK.alpha=0,pushUniforms()); draw(); requestAnimationFrame(()=>res(CK.simT)); }));
+}
+window.__astrid={drive,pet:()=>({down:pet.down,content:pet.content,happy:happy.x,lid:lid.x,roll:roll.x,press:press.x,body:bodyA.x,revs:pet.revs.length,lastTickle:pet.lastTickle,simT:CK.simT,voice:Voice.stats()}),bench,get T(){return T},state:()=>state,pose:()=>({yaw:yaw.x,pitch:pitch.x,size:size.x,lid:lid.x,gYaw:gYaw.x,gPitch:gPitch.x}),fps:()=>fps,rscale:()=>rscale};
 })();
 </script>
 </body>
