@@ -37,7 +37,7 @@ uniform vec2  uMode;    // x: unused, y: dark (0/1)
 uniform vec4  uRot;     // eyes: cos yaw, sin yaw, cos pitch, sin pitch
 uniform vec4  uEyeP;    // eyes: -, -, lidFade (morph-blended), capsule radius (units)
 uniform vec4  uEyeA;    // eye box (radians): half width, half visible height (morph-blended), 1/hw, 1/hh
-uniform vec4  uShape;   // eye shape params: corner radius ×hw, ellipse weight, egg taper, -
+uniform vec4  uShape;   // eye shape params: corner radius ×hw, ellipse weight, egg taper, peak (parallelogram/wedge; 0=off)
 uniform vec4  uShapeT;  // eye shape params: cos lean, sin lean, bean bow ×hw, rest lon of the eyes (±)
 uniform vec4  uAsym;    // toon shape: width scale ±(1 + side·x), height offset (side·y), cut / expression-lid height, its corner k
 uniform vec4  uCutN;    // cut / expression-lid line normal: left eye (xy), right eye (zw)
@@ -55,6 +55,11 @@ uniform vec4  uBrow;    // brow: lift×hh, halfW×hw, thick×hw, angle (rad, + =
 uniform vec3  uBrowCol; // brow colour
 uniform vec4  uBrowX;   // brow stroke extras: arch×hh (mid rise above chord), taper (outer/inner thick), outline width×thick, -
 uniform vec3  uToonCol; // toon ink: the coat's dark/mark tone
+uniform float uQA;     // >0.5: solid white eye silhouettes on black (for IoU)
+uniform sampler2D uEyeAtlas; // Polly exact binary sprite atlas (R8, 1=inside)
+uniform vec4  uAtlas;  // x=emote index (−1=off), y=cols, z=rows, w=unused (binary)
+uniform vec4  uStampL; // screen-space L eye stamp: cx, cy, halfX, halfY (same space as vP/uEyeL)
+uniform vec4  uStampR; // screen-space R eye stamp
 uniform vec4  uShadow;  // eye drop shadow: strength, lat offset down (rad), gauss k (exp2), -
 uniform vec4  uShapeC;  // eye lid (radians): egg-centre offset, lid line (rel. to centre), corner k, -
 uniform vec4  uEyeL, uEyeR; // eyes: tight bounding capsules = projected stadium axis ends (a.xy, b.xy), screen units
@@ -86,6 +91,29 @@ vec3 tint(vec3 col, vec3 c, float a){
   return mix(mix(col, c, a), 1.0 - (1.0 - col) * (1.0 - c * a * 0.8), uMode.y);
 }
 
+
+// Screen-space exact sprite stamp: binary L/R atlas cells (no mirror; dizzy is asymmetric).
+float atlasStamp(vec2 p, vec4 stamp, float side){
+  if (uAtlas.x < -0.5) return 1e5;
+  vec2 ctr = stamp.xy;
+  vec2 hst = max(stamp.zw, vec2(1e-3));
+  vec2 t = (p - ctr) / hst;               // [-1,1] in stamp box
+  if (max(abs(t.x), abs(t.y)) > 1.02) return 1e5;
+  // cell index: emote*2 + (R?1:0); atlas is 8×3 binary-LR
+  float idx = uAtlas.x * 2.0 + (side > 0.0 ? 1.0 : 0.0);
+  float cols = uAtlas.y;
+  float rows = uAtlas.z;
+  float col = mod(idx, cols);
+  float row = floor(idx / cols);
+  // PNG row0 = top; vP y-down: +t.y (below) → PNG bottom
+  vec2 local = vec2(t.x * 0.5 + 0.5, t.y * 0.5 + 0.5);
+  local = clamp(local, 0.0, 1.0);
+  vec2 uv = (vec2(col, row) + local) / vec2(cols, rows);
+  float enc = texture2D(uEyeAtlas, uv).r; // 1 = inside (white)
+  // negative inside for step(d,0) fill; uAtlas.w unused for binary (kept for compat)
+  return (0.5 - enc) * min(hst.x, hst.y);
+}
+
 // ---- eye shapes: ONE parametric SDF in eye-local sphere coords (radians; < 0 inside), box b = (half w,
 // half h). Every shape is a parameter set (face.js SHAPES / eyeSDFP): stadium = rounded box with r = hw,
 // squircle r = .55hw, dot = round box, oval = ellipse, egg = tapered ellipse, bean = leaning bowed ellipse,
@@ -94,8 +122,7 @@ vec3 tint(vec3 col, vec3 c, float a){
 // smooth max: rounds the corner where the lid line meets the shape by ~k
 float smax(float a, float c, float k){ float h = max(k - abs(a - c), 0.0) / k; return max(a, c) + h * h * k * 0.25; }
 // rp = rim transform applied after the shared lattice warp ('toon' rim: outward, up, scale; vec3(0,0,1) = none).
-// Eye SDF. doCut=true applies the hood/expression cut (white fill); false = full oval (Polly rim / lid crescent).
-float eyeSDF_ex(vec2 p, vec2 b, float side, vec3 rp, bool doCut){
+float eyeSDF(vec2 p, vec2 b, float side, vec3 rp){
   float sx = 1.0 + side * uAsym.x;
   p.y += side * uAsym.y; p.x /= sx;
   p.y -= uShapeC.x;
@@ -110,18 +137,51 @@ float eyeSDF_ex(vec2 p, vec2 b, float side, vec3 rp, bool doCut){
   float yn = clamp(q.y * ib.y, -1.0, 1.0);
   q.x -= side * uShapeT.z * b.x * (1.0 - yn * yn);
   float g = 1.0 - uShape.z * yn; q.x /= g;
-  float r = uShape.x * b.x; vec2 k = abs(q) - b + r;
+  // Exact binary sprite atlas (Polly 1:1): L/R cells, no mirror.
+  // Atlas cell covers square [-1,1]² in units of S=max(b.x,b.y); hood/cut already baked in.
+  if (uAtlas.x > -0.5) {
+    float S = max(b.x, b.y);
+    vec2 t = q / max(S, 1e-6);
+    float idx = uAtlas.x * 2.0 + (side > 0.0 ? 1.0 : 0.0);
+    float cols = uAtlas.y;
+    float rows = uAtlas.z;
+    float col = mod(idx, cols);
+    float row = floor(idx / cols);
+    // eye +y up → PNG top (local.y=0): flip vs screen-stamp convention
+    vec2 local = vec2(t.x * 0.5 + 0.5, 0.5 - t.y * 0.5);
+    local = clamp(local, 0.0, 1.0);
+    vec2 uv = (vec2(col, row) + local) / vec2(cols, rows);
+    float enc = texture2D(uEyeAtlas, uv).r; // 1 = inside
+    float dA = (0.5 - enc) * S;             // radians-ish; <0 inside
+    return dA * min(sx, 1.0);
+  }
+  // peak (uShape.w): pointed-hood / parallelogram wedge. 0 = off → classic pixel path.
+  // Shear shifts the TOP inward (toward the nose) so a slanted cut yields a sharp HIGH INNER peak
+  // and a narrower OUTER belly — the Polly pleading parallelogram that rounded-box∩plane alone can't make.
+  float peak = uShape.w;
+  if (peak > 1e-5) {
+    q.x += (-side) * peak * q.y;                         // parallelogram shear (top → inward)
+  }
+  float r = uShape.x * b.x;
+  if (peak > 1e-5) r = mix(r, min(r, 0.18 * b.x), clamp(peak * 1.8, 0.0, 1.0)); // sharper corners for the peak
+  vec2 k = abs(q) - b + r;
   float dR = length(max(k, 0.0)) + min(max(k.x, k.y), 0.0) - r;
   vec2 e0 = q * ib, e1 = e0 * ib;
   float k0 = length(e0);
   float dE = k0 * (k0 - 1.0) * inversesqrt(max(dot(e1, e1), 1e-8));
   float d = mix(dR, dE, uShape.y) * g * (rp.z * js);
   vec2 pl = p - ro;
-  if (doCut)
-    d = smax(d, dot(pl, side < 0.0 ? uCutN.xy : uCutN.zw) - uAsym.z, uAsym.w);
+  // Hood / expression cut changes the WHITE OUTLINE (true silhouette), not a painted lid on a fixed oval.
+  vec2 cn = side < 0.0 ? uCutN.xy : uCutN.zw;
+  d = max(d, dot(pl, cn) - uAsym.z);
+  // Outer-biased second hood plane: carves the outer-top/belly while leaving the inner peak
+  if (peak > 1e-5) {
+    vec2 on = normalize(cn + vec2(side * peak * 0.95, -0.20 * peak));
+    float oc = uAsym.z - peak * b.y * 0.40;
+    d = max(d, dot(pl, on) - oc);
+  }
   return smax(d, pl.y - uShapeC.y, uShapeC.z) * min(sx, 1.0);
 }
-float eyeSDF(vec2 p, vec2 b, float side, vec3 rp){ return eyeSDF_ex(p, b, side, rp, true); }
 
 
 // toon pupil coverage (unclipped), computed by the centre tap (always called first) and reused by the two side
@@ -238,6 +298,11 @@ vec3 eyeTap(vec3 col, float lon, float lat, float Z, float rimA, float pc){
   float ds = d * RR * (0.5 * Z + 0.5);                        // ≈ screen units (foreshortened)
   float w  = uEyeK.x;
   float vis = uEyeP.z * smoothstep(0.02, 0.08, Z);            // lidFade · z>0.02 cull
+  // QA silhouette mode: solid white fill of the (cut) white SDF — no glow/pupil/brows
+  if (uQA > 0.5) {
+    float fill = step(ds, 0.0);           // hard silhouette (inside white SDF)
+    return mix(col, vec3(1.0), fill * step(0.01, vis));
+  }
   float dsp = max(ds, 0.0);
   float gv = vis * (1.0 - abs(rimA));                              // the toon rim stays crisp (no glow over it)
   col = tint(col, uGlow, 0.26 * g2(dsp, uEyeK.y) * gv);       // soft luminous glow
@@ -280,30 +345,14 @@ vec3 eyeTap(vec3 col, float lon, float lat, float Z, float rimA, float pc){
       gPupilCol = mix(gPupilCol, vec3(1.0), gv * 0.75);
     }
   }
-  // Polly lid crescent: lavender in the band inside the full oval but above the hood cut (and soft upper wash when open).
+  // Polly: lavender upper fill inside the (cut) white
   if (uMotif.z > 0.0) {
-    float dFull = eyeSDF_ex(vec2(u, v), uEyeA.xy, side, vec3(0.0, 0.0, 1.0), false);
-    float dCut  = ds / max(RR * (0.5 * Z + 0.5), 1e-4);                   // already-cut white SDF in rad
-    float inFull = 1.0 - smoothstep(-w, w, dFull * RR * (0.5 * Z + 0.5));
-    float inCut  = 1.0 - smoothstep(-w, w, ds);
-    float crescent = max(inFull - inCut, 0.0);                            // hood lid area
-    float openGate = uAsym.z > 4.0 * uEyeA.y ? 0.0 : 1.0;
-    ec = mix(ec, vec3(0.76, 0.70, 0.88), crescent * 0.95 * openGate);
-    float upper = smoothstep(-uEyeA.y * 0.05, uEyeA.y * 0.50, v);
-    ec = mix(ec, vec3(0.78, 0.72, 0.88), 0.42 * upper * inCut);
+    float upper = smoothstep(-uEyeA.y * 0.25, uEyeA.y * 0.25, v);
+    ec = mix(ec, vec3(0.76, 0.70, 0.88), 0.75 * upper);
   }
   ec = mix(ec, gPupilCol, gCovP);
 #endif
   float fill = 1.0 - smoothstep(-w, w, ds);
-  if (uMotif.z > 0.0 && uAsym.z <= 4.0 * uEyeA.y) {
-    float dFull = eyeSDF_ex(vec2(u, v), uEyeA.xy, side, vec3(0.0, 0.0, 1.0), false);
-    float inFull = 1.0 - smoothstep(-w, w, dFull * RR * (0.5 * Z + 0.5));
-    float crescent = max(inFull - fill, 0.0);
-    col = mix(col, vec3(0.76, 0.70, 0.88), crescent * vis * 0.95);
-#ifdef TOON
-    gFillMax = max(gFillMax, inFull * vis);
-#endif
-  }
 #ifdef TOON
   gFillMax = max(gFillMax, fill * vis);
 #endif
@@ -329,9 +378,7 @@ float eyeRim(float lon, float lat, float Z){
   float side = lon < 0.0 ? -1.0 : 1.0;
   float u = lon - uShapeT.w * side;
   float v = lat - uEyeK2.z + uEyeK2.w * u * u;
-  // Polly: rim follows the FULL shared oval (uncut); classic/toon rim follows the cut white
-  bool full = uMotif.z > 0.5;
-  float d = eyeSDF_ex(vec2(u - side * uToonR.x, v - uToonR.y), uEyeA.xy, side, uRimP.xyz, !full) - uToon.z;
+  float d = eyeSDF(vec2(u - side * uToonR.x, v - uToonR.y), uEyeA.xy, side, uRimP.xyz) - uToon.z;
   float vis = uEyeP.z * smoothstep(0.02, 0.08, Z);
   return uToon.x * vis * (1.0 - smoothstep(-uEyeK.x, uEyeK.x, d * RR * (0.5 * Z + 0.5)));
 }
@@ -368,9 +415,9 @@ vec3 eyes(vec3 col, vec2 p, vec2 off){
 #ifdef TOON
   // toon variant (compiled only while the toon layer is on: '#define TOON' is prepended by index.html)
   float rimA = 0.0;                                            // ≥ 0 on the centre tap, ≤ 0 on the side taps
-  if (uToon.x > 0.0) { rimA = eyeRim(lon, lat, Z); col = mix(col, uToonCol, rimA); }
+  if (uQA < 0.5 && uToon.x > 0.0) { rimA = eyeRim(lon, lat, Z); col = mix(col, uToonCol, rimA); }
   // emote stroke brows (arched tapered capsules + dark outline) + anger marks + soft blush
-  if (uMotif.z > 0.0) {
+  if (uQA < 0.5 && uMotif.z > 0.0) {
     float side = lon < 0.0 ? -1.0 : 1.0;
     float u = lon - uShapeT.w * side;
     float v = lat - uEyeK2.z + uEyeK2.w * u * u;
@@ -389,7 +436,7 @@ vec3 eyes(vec3 col, vec2 p, vec2 off){
       col = mix(col, uMotifCol, mv * 0.95);
     }
   }
-  if (uMotif.w > 0.0) {
+  if (uQA < 0.5 && uMotif.w > 0.0) {
     // blush: soft ellipses just below/outside each eye (love / blush poses)
     float side = lon < 0.0 ? -1.0 : 1.0;
     float u = lon - uShapeT.w * side + side * uEyeA.x * .55;
@@ -417,6 +464,20 @@ void main(){
   vec2 d = p - C; float r = length(d * 0.01) * 100.0;   // scaled: no fp16 overflow far off-orb (mediump)
   float dith = (dhash(mod(f, 64.0)) - 0.5) / 255.0;     // dither (kills 8-bit banding)
 
+  // QA silhouette: black page, solid white eye fills (cut SDF) — for IoU vs ref masks
+  if (uQA > 0.5) {
+    vec3 col = vec3(0.0);
+    if (uAtlas.x > -0.5) {
+      // Screen-space traced stamps (1:1 vs flat ref silhouettes)
+      float d = min(atlasStamp(p, uStampL, -1.0), atlasStamp(p, uStampR, 1.0));
+      col = mix(col, vec3(1.0), step(d, 0.0));
+    } else {
+      float rj = uEyeP.w;
+      if (uEyeP.z > 0.0 && min(seg2(p, uEyeL), seg2(p, uEyeR)) < rj * rj)
+        col = eyes(col, p, vec2(0.0));
+    }
+    gl_FragColor = vec4(col, 1.0); return;
+  }
   // early-out: past the bloom (its gaussian is < 0.3% there) only paper remains
   if (r > uFrost.w) { gl_FragColor = vec4(uPaper + dith, 1.0); return; }
 

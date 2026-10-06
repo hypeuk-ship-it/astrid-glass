@@ -54,7 +54,7 @@
      The SDFs return radians (< 0 inside); the shader runs the same maths per pixel.
      side = −1 for the screen-left eye, +1 for the right (bean mirrors).                                 */
   /* natural w, h (radians at size 1; eyes sit ±0.2 apart, so w ≤ ~.25) · ex = bounding half-width ×hw ·
-     unified-SDF params (see eyeSDFP): r corner radius ×hw, e ellipse weight, taper (egg), tilt (rad, bean
+     unified-SDF params (see eyeSDFP): r corner radius ×hw, e ellipse weight, taper (egg), peak (parallelogram/wedge; 0=off), tilt (rad, bean
      lean inward; < 0 leans outward), bend (×hw, bean bow). Placement: lon, lat = rest eye centre on the
      sphere (gaze still adds the head turn). Lid: amin = flattest allowed aspect (1 = may round off to a
      circle; ≥ h/w = keep its own aspect, as 'ref' does), sq = how much a squint/blink shrinks it instead of squashing.
@@ -68,16 +68,16 @@
      semi-axes (×open hw/hh), pin = inward rest (×hw), pdown = rest drop (×hh).
      A morph lerps all of these, so the shader runs ONE SDF per tap and the eyes glide to the new spot. */
   const SHAPES=Object.freeze([
-    Object.freeze({name:'stadium', w:.23, h:.52, ex:1,    r:1,   e:0, taper:0,   tilt:0,    bend:0, lon:.2, lat:.04, amin:1, sq:.15, top:0, ck:0, slant:0, cutc:0, cutk:0, asw:0, ahy:0, atilt:0, lki:1, lkm:1, lko:1, ro:.15, ru:.24, rg:.05, rs:1, rpo:0, rpu:0, pa:.43, pb:.63, pin:.17, pdown:.14}),   // default pill
-    Object.freeze({name:'egg',     w:.24, h:.33, ex:1.2,  r:1,   e:1, taper:.17, tilt:0,    bend:0, lon:.2, lat:.04, amin:1, sq:.15, top:0, ck:0, slant:0, cutc:0, cutk:0, asw:0, ahy:0, atilt:0, lki:1, lkm:1, lko:1, ro:.15, ru:.24, rg:.05, rs:1, rpo:0, rpu:0, pa:.43, pb:.63, pin:.17, pdown:.14}),   // pebble, wider at the bottom
-    Object.freeze({name:'dot',     w:.24, h:.24, ex:1,    r:1,   e:0, taper:0,   tilt:0,    bend:0, lon:.2, lat:.04, amin:1, sq:.15, top:0, ck:0, slant:0, cutc:0, cutk:0, asw:0, ahy:0, atilt:0, lki:1, lkm:1, lko:1, ro:.15, ru:.24, rg:.05, rs:1, rpo:0, rpu:0, pa:.43, pb:.63, pin:.17, pdown:.14}),   // plain circle
-    Object.freeze({name:'oval',    w:.22, h:.42, ex:1,    r:1,   e:1, taper:0,   tilt:0,    bend:0, lon:.2, lat:.04, amin:1, sq:.15, top:0, ck:0, slant:0, cutc:0, cutk:0, asw:0, ahy:0, atilt:0, lki:1, lkm:1, lko:1, ro:.15, ru:.24, rg:.05, rs:1, rpo:0, rpu:0, pa:.43, pb:.63, pin:.17, pdown:.14}),   // smooth tall ellipse
-    Object.freeze({name:'bean',    w:.2,  h:.4,  ex:1.45, r:1,   e:1, taper:0,   tilt:.244, bend:.35, lon:.2, lat:.04, amin:1, sq:.15, top:0, ck:0, slant:0, cutc:0, cutk:0, asw:0, ahy:0, atilt:0, lki:1, lkm:1, lko:1, ro:.15, ru:.24, rg:.05, rs:1, rpo:0, rpu:0, pa:.43, pb:.63, pin:.17, pdown:.14}), // leaning kidney bean
-    Object.freeze({name:'squircle',w:.225,h:.245,ex:1.3,  r:.55, e:0, taper:0,   tilt:0,    bend:0, lon:.2, lat:.04, amin:1, sq:.15, top:0, ck:0, slant:0, cutc:0, cutk:0, asw:0, ahy:0, atilt:0, lki:1, lkm:1, lko:1, ro:.15, ru:.24, rg:.05, rs:1, rpo:0, rpu:0, pa:.43, pb:.63, pin:.17, pdown:.14}), // soft rounded square
+    Object.freeze({name:'stadium', w:.23, h:.52, ex:1,    r:1,   e:0, taper:0,   tilt:0,    bend:0, peak:0, lon:.2, lat:.04, amin:1, sq:.15, top:0, ck:0, slant:0, cutc:0, cutk:0, asw:0, ahy:0, atilt:0, lki:1, lkm:1, lko:1, ro:.15, ru:.24, rg:.05, rs:1, rpo:0, rpu:0, pa:.43, pb:.63, pin:.17, pdown:.14}),   // default pill
+    Object.freeze({name:'egg',     w:.24, h:.33, ex:1.2,  r:1,   e:1, taper:.17, tilt:0,    bend:0, peak:0, lon:.2, lat:.04, amin:1, sq:.15, top:0, ck:0, slant:0, cutc:0, cutk:0, asw:0, ahy:0, atilt:0, lki:1, lkm:1, lko:1, ro:.15, ru:.24, rg:.05, rs:1, rpo:0, rpu:0, pa:.43, pb:.63, pin:.17, pdown:.14}),   // pebble, wider at the bottom
+    Object.freeze({name:'dot',     w:.24, h:.24, ex:1,    r:1,   e:0, taper:0,   tilt:0,    bend:0, peak:0, lon:.2, lat:.04, amin:1, sq:.15, top:0, ck:0, slant:0, cutc:0, cutk:0, asw:0, ahy:0, atilt:0, lki:1, lkm:1, lko:1, ro:.15, ru:.24, rg:.05, rs:1, rpo:0, rpu:0, pa:.43, pb:.63, pin:.17, pdown:.14}),   // plain circle
+    Object.freeze({name:'oval',    w:.22, h:.42, ex:1,    r:1,   e:1, taper:0,   tilt:0,    bend:0, peak:0, lon:.2, lat:.04, amin:1, sq:.15, top:0, ck:0, slant:0, cutc:0, cutk:0, asw:0, ahy:0, atilt:0, lki:1, lkm:1, lko:1, ro:.15, ru:.24, rg:.05, rs:1, rpo:0, rpu:0, pa:.43, pb:.63, pin:.17, pdown:.14}),   // smooth tall ellipse
+    Object.freeze({name:'bean',    w:.2,  h:.4,  ex:1.45, r:1,   e:1, taper:0,   tilt:.244, bend:.35, peak:0, lon:.2, lat:.04, amin:1, sq:.15, top:0, ck:0, slant:0, cutc:0, cutk:0, asw:0, ahy:0, atilt:0, lki:1, lkm:1, lko:1, ro:.15, ru:.24, rg:.05, rs:1, rpo:0, rpu:0, pa:.43, pb:.63, pin:.17, pdown:.14}), // leaning kidney bean
+    Object.freeze({name:'squircle',w:.225,h:.245,ex:1.3,  r:.55, e:0, taper:0,   tilt:0,    bend:0, peak:0, lon:.2, lat:.04, amin:1, sq:.15, top:0, ck:0, slant:0, cutc:0, cutk:0, asw:0, ahy:0, atilt:0, lki:1, lkm:1, lko:1, ro:.15, ru:.24, rg:.05, rs:1, rpo:0, rpu:0, pa:.43, pb:.63, pin:.17, pdown:.14}), // soft rounded square
     // Reference (Henlo's image): a full, closed, plump EGG, narrow rounded end UP, fullest low (~60% down the egg, ~2/3 down the part the image shows),
     // soft and round all round, gentle outward lean (a symmetric average of the two eyes in the image, whose flat
     // bottoms are only the dome edge cropping them), large, close (gap ≈ half an eye width), centred on the orb.
-    Object.freeze({name:'ref',     w:.44, h:.5, ex:1.25, r:1,   e:1, taper:.22, tilt:-.3, bend:0, lon:.44, lat:0, amin:99, sq:.22, top:1, ck:.3, slant:0, cutc:0, cutk:0, asw:0, ahy:0, atilt:0, lki:1, lkm:1, lko:1, ro:.15, ru:.24, rg:.05, rs:1, rpo:0, rpu:0, pa:.43, pb:.63, pin:.17, pdown:.14}),
+    Object.freeze({name:'ref',     w:.44, h:.5, ex:1.25, r:1,   e:1, taper:.22, tilt:-.3, bend:0, peak:0, lon:.44, lat:0, amin:99, sq:.22, top:1, ck:.3, slant:0, cutc:0, cutk:0, asw:0, ahy:0, atilt:0, lki:1, lkm:1, lko:1, ro:.15, ru:.24, rg:.05, rs:1, rpo:0, rpu:0, pa:.43, pb:.63, pin:.17, pdown:.14}),
     // Toon (the drawing tutorial, built its way): step 2/3 a plain upright ellipse (the tutorial's near eye,
     // semi-axes 0.427 : 0.600), mirrored; step 4 the rim = the SAME ellipse scaled ×1.068 and moved up 0.17·hh
     // (+0.06·hw outward), drawn behind; step 5 ONE fixed 3×3 lattice warps both: only its bottom row moves,
@@ -85,26 +85,21 @@
     // (0.36·hw × 0.60·hh) sitting 0.36·hw inward, clipped to the white. The 3/4 look is a camera angle, so the
     // asymmetry (slider, default 0; 1 = the tutorial) only adds the far-eye narrowing on request: asw = width
     // difference, ahy = eye heights, atilt = shared lid tilt (used by the expression lids).
-    Object.freeze({name:'toon',    w:.47, h:.66, ex:1, r:1, e:1, taper:0, tilt:0, bend:0, lon:.38, lat:-.065, amin:99, sq:.22, top:1, ck:.3, slant:0, cutc:0, cutk:0, asw:.17, ahy:.17, atilt:.16,
+    Object.freeze({name:'toon',    w:.47, h:.66, ex:1, r:1, e:1, taper:0, tilt:0, bend:0, peak:0, lon:.38, lat:-.065, amin:99, sq:.22, top:1, ck:.3, slant:0, cutc:0, cutk:0, asw:.17, ahy:.17, atilt:.16,
       lki:.714, lkm:.726, lko:.92, ro:0, ru:0, rg:0, rs:1.068, rpo:.06, rpu:.17, pa:.36, pb:.60, pin:.36, pdown:.05}),
-    // ---- Polly (batch 1 v2): ONE character face. Shared white-eye base (near-circle oval, thick rim),
-    // measured from the Polly sheet. Each polly-* is the same base with per-emotion slant / hood (cutc) /
-    // tilt / pupil pose — same SDF+lid pipeline as toon, not a different eye species. Motifs, stroke brows,
-    // blush and anger-marks are drawn by the toon layer (emotes.js + glass.frag).
-    // cutc: 0 = open; small (≈0.05–0.15) = heavy hood; larger (≈0.3–0.5) = light hood. Expression lids left
-    // at 0 so cutc/slant own the pose (they would otherwise replace the cut).
-    Object.freeze({name:'polly-cheerful',  w:.40, h:.42, ex:1, r:1, e:1, taper:0, tilt:.06, bend:0, lon:.34, lat:.02, amin:99, sq:.18, top:1, ck:.28, slant:.08, cutc:0,    cutk:.10, asw:0, ahy:0, atilt:0, lki:1, lkm:1, lko:1, ro:.09, ru:.10, rg:.042, rs:1, rpo:0, rpu:0, pa:.44, pb:.44, pin:.04, pdown:.04}),
-    Object.freeze({name:'polly-confident', w:.40, h:.42, ex:1, r:1, e:1, taper:0, tilt:.04, bend:0, lon:.34, lat:.02, amin:99, sq:.18, top:1, ck:.28, slant:.10, cutc:.28, cutk:.10, asw:0, ahy:0, atilt:0, lki:1, lkm:1, lko:1, ro:.09, ru:.10, rg:.042, rs:1, rpo:0, rpu:0, pa:.46, pb:.46, pin:.02, pdown:.02}),
-    Object.freeze({name:'polly-bored',     w:.40, h:.42, ex:1, r:1, e:1, taper:0, tilt:.02, bend:0, lon:.34, lat:.02, amin:99, sq:.18, top:1, ck:.28, slant:.20, cutc:.10, cutk:.14, asw:0, ahy:0, atilt:0, lki:1, lkm:1, lko:1, ro:.09, ru:.10, rg:.042, rs:1, rpo:0, rpu:0, pa:.38, pb:.38, pin:.08, pdown:.20}),
-    Object.freeze({name:'polly-angry',     w:.40, h:.42, ex:1, r:1, e:1, taper:0, tilt:.12, bend:0, lon:.34, lat:.02, amin:99, sq:.18, top:1, ck:.28, slant:.38, cutc:.18, cutk:.12, asw:0, ahy:0, atilt:0, lki:1, lkm:1, lko:1, ro:.09, ru:.10, rg:.042, rs:1, rpo:0, rpu:0, pa:.30, pb:.30, pin:.08, pdown:.06}),
-    Object.freeze({name:'polly-sleepy',    w:.40, h:.42, ex:1, r:1, e:1, taper:0, tilt:.04, bend:0, lon:.34, lat:.02, amin:99, sq:.18, top:1, ck:.28, slant:.08, cutc:.06, cutk:.14, asw:0, ahy:0, atilt:0, lki:1, lkm:1, lko:1, ro:.09, ru:.10, rg:.042, rs:1, rpo:0, rpu:0, pa:.22, pb:.22, pin:.02, pdown:.24}),
-    Object.freeze({name:'polly-smug',      w:.40, h:.42, ex:1, r:1, e:1, taper:0, tilt:.02, bend:0, lon:.34, lat:.02, amin:99, sq:.18, top:1, ck:.28, slant:.14, cutc:.08, cutk:.14, asw:0, ahy:0, atilt:0, lki:1, lkm:1, lko:1, ro:.09, ru:.10, rg:.042, rs:1, rpo:0, rpu:0, pa:.36, pb:.36, pin:.14, pdown:.16}),
-    Object.freeze({name:'polly-furious',   w:.40, h:.42, ex:1, r:1, e:1, taper:0, tilt:.14, bend:0, lon:.34, lat:.02, amin:99, sq:.18, top:1, ck:.28, slant:.46, cutc:.12, cutk:.12, asw:0, ahy:0, atilt:0, lki:1, lkm:1, lko:1, ro:.09, ru:.10, rg:.042, rs:1, rpo:0, rpu:0, pa:.16, pb:.16, pin:.06, pdown:.04}),
-    Object.freeze({name:'polly-starry',    w:.40, h:.42, ex:1, r:1, e:1, taper:0, tilt:.06, bend:0, lon:.34, lat:.02, amin:99, sq:.18, top:1, ck:.28, slant:.06, cutc:0,    cutk:.10, asw:0, ahy:0, atilt:0, lki:1, lkm:1, lko:1, ro:.09, ru:.10, rg:.042, rs:1, rpo:0, rpu:0, pa:.50, pb:.50, pin:.02, pdown:.02}),
-    Object.freeze({name:'polly-pleading',  w:.40, h:.42, ex:1, r:1, e:1, taper:0, tilt:.08, bend:0, lon:.34, lat:.02, amin:99, sq:.18, top:1, ck:.28, slant:.14, cutc:.22, cutk:.12, asw:0, ahy:0, atilt:0, lki:1, lkm:1, lko:1, ro:.09, ru:.10, rg:.042, rs:1, rpo:0, rpu:0, pa:.44, pb:.44, pin:.04, pdown:.10}),
-    Object.freeze({name:'polly-love',      w:.40, h:.42, ex:1, r:1, e:1, taper:0, tilt:.06, bend:0, lon:.34, lat:.02, amin:99, sq:.18, top:1, ck:.28, slant:.16, cutc:.12, cutk:.12, asw:0, ahy:0, atilt:0, lki:1, lkm:1, lko:1, ro:.09, ru:.10, rg:.042, rs:1, rpo:0, rpu:0, pa:.46, pb:.46, pin:.02, pdown:.08}),
-    Object.freeze({name:'polly-dizzy',     w:.40, h:.42, ex:1, r:1, e:1, taper:0, tilt:.04, bend:0, lon:.34, lat:.02, amin:99, sq:.18, top:1, ck:.28, slant:.04, cutc:0,    cutk:.10, asw:0, ahy:0, atilt:0, lki:1, lkm:1, lko:1, ro:.09, ru:.10, rg:.042, rs:1, rpo:0, rpu:0, pa:.50, pb:.50, pin:.00, pdown:.00}),
-    Object.freeze({name:'polly-blush',     w:.40, h:.42, ex:1, r:1, e:1, taper:0, tilt:.10, bend:0, lon:.34, lat:.02, amin:99, sq:.18, top:1, ck:.28, slant:.12, cutc:0,    cutk:.10, asw:0, ahy:0, atilt:0, lki:1, lkm:1, lko:1, ro:.09, ru:.10, rg:.042, rs:1, rpo:0, rpu:0, pa:.18, pb:.18, pin:.18, pdown:.28}),
+    // ---- Polly v3: 1:1 silhouettes; hooded rounded-box+cut.
+    Object.freeze({name:'polly-cheerful', atlas:0, w:0.456, h:0.468, ex:1, r:1, e:0, taper:0, tilt:0, bend:0, peak:0, lon:0.39, lat:0.056, amin:99, sq:.18, top:1, ck:.28, slant:0, cutc:9, cutk:0, asw:0, ahy:0, atilt:0.16, lki:1, lkm:1, lko:1, ro:.09, ru:.10, rg:.042, rs:1, rpo:0, rpu:0, pa:0.42, pb:0.42, pin:0.04, pdown:0.04}),
+    Object.freeze({name:'polly-confident', atlas:1, w:0.423, h:0.423, ex:1, r:1, e:0, taper:0, tilt:0, bend:0, peak:0, lon:0.326, lat:-0.034, amin:99, sq:.18, top:1, ck:.28, slant:0, cutc:9, cutk:0, asw:0, ahy:0, atilt:-0.08, lki:1, lkm:1, lko:1, ro:.09, ru:.10, rg:.042, rs:1, rpo:0, rpu:0, pa:0.44, pb:0.44, pin:0.02, pdown:0.02}),
+    Object.freeze({name:'polly-bored', atlas:2, w:0.4864, h:0.4864, ex:1, r:1, e:0, taper:0, tilt:0, bend:0, peak:0, lon:0.371, lat:0.02, amin:99, sq:.18, top:1, ck:.28, slant:0, cutc:9, cutk:0, asw:0, ahy:0, atilt:-0.08, lki:1, lkm:1, lko:1, ro:.09, ru:.10, rg:.042, rs:1, rpo:0, rpu:0, pa:0.34, pb:0.34, pin:0.10, pdown:0.16}),
+    Object.freeze({name:'polly-angry', atlas:3, w:0.4524, h:0.4524, ex:1, r:1, e:0, taper:0, tilt:0, bend:0, peak:0, lon:0.302, lat:0.044, amin:99, sq:.18, top:1, ck:.28, slant:0, cutc:9, cutk:0, asw:0, ahy:0, atilt:0.0009932, lki:1, lkm:1, lko:1, ro:.09, ru:.10, rg:.042, rs:1, rpo:0, rpu:0, pa:0.28, pb:0.28, pin:0.08, pdown:0.06}),
+    Object.freeze({name:'polly-sleepy', atlas:4, w:0.414, h:0.408, ex:1, r:1, e:0, taper:0, tilt:0, bend:0, peak:0, lon:0.328, lat:0.02, amin:99, sq:.18, top:1, ck:.28, slant:0, cutc:9, cutk:0, asw:0, ahy:0, atilt:0.07473, lki:1, lkm:1, lko:1, ro:.09, ru:.10, rg:.042, rs:1, rpo:0, rpu:0, pa:0.18, pb:0.18, pin:0.02, pdown:0.20}),
+    Object.freeze({name:'polly-smug', atlas:5, w:0.3031, h:0.3031, ex:1, r:1, e:0, taper:0, tilt:0, bend:0, peak:0, lon:0.315, lat:0.02, amin:99, sq:.18, top:1, ck:.28, slant:0, cutc:9, cutk:0, asw:0, ahy:0, atilt:-0.034, lki:1, lkm:1, lko:1, ro:.09, ru:.10, rg:.042, rs:1, rpo:0, rpu:0, pa:0.32, pb:0.32, pin:0.16, pdown:0.12}),
+    Object.freeze({name:'polly-furious', atlas:6, w:0.5874, h:0.54813, ex:1, r:1, e:0, taper:0, tilt:0, bend:0, peak:0, lon:0.361, lat:0.014, amin:99, sq:.18, top:1, ck:.28, slant:0, cutc:9, cutk:0, asw:0, ahy:0, atilt:-0.07843, lki:1, lkm:1, lko:1, ro:.09, ru:.10, rg:.042, rs:1, rpo:0, rpu:0, pa:0.14, pb:0.14, pin:0.06, pdown:0.04}),
+    Object.freeze({name:'polly-starry', atlas:7, w:0.5275, h:0.5515, ex:1, r:1, e:0, taper:0, tilt:0, bend:0, peak:0, lon:0.372, lat:0.026, amin:99, sq:.18, top:1, ck:.28, slant:0, cutc:9, cutk:0, asw:0, ahy:0, atilt:-0.07472, lki:1, lkm:1, lko:1, ro:.09, ru:.10, rg:.042, rs:1, rpo:0, rpu:0, pa:0.50, pb:0.50, pin:0.02, pdown:0.02}),
+    Object.freeze({name:'polly-pleading', atlas:8, w:0.4272, h:0.4272, ex:1, r:1, e:0, taper:0, tilt:0, bend:0, peak:0, lon:0.342, lat:0.032, amin:99, sq:.18, top:1, ck:.28, slant:0, cutc:9, cutk:0, asw:0, ahy:0, atilt:0.22, lki:1, lkm:1, lko:1, ro:.09, ru:.10, rg:.042, rs:1, rpo:0, rpu:0, pa:0.42, pb:0.42, pin:0.04, pdown:0.10}),
+    Object.freeze({name:'polly-love', atlas:9, w:0.546, h:0.546, ex:1, r:1, e:0, taper:0, tilt:0, bend:0, peak:0, lon:0.32, lat:0.02, amin:99, sq:.18, top:1, ck:.28, slant:0, cutc:9, cutk:0, asw:0, ahy:0, atilt:-0.08, lki:1, lkm:1, lko:1, ro:.09, ru:.10, rg:.042, rs:1, rpo:0, rpu:0, pa:0.44, pb:0.44, pin:0.02, pdown:0.08}),
+    Object.freeze({name:'polly-dizzy', atlas:10, w:0.42, h:0.42, ex:1, r:1, e:0, taper:0, tilt:0, bend:0, peak:0, lon:0.323, lat:0.002, amin:99, sq:.18, top:1, ck:.28, slant:0, cutc:9, cutk:0, asw:0, ahy:0, atilt:0.115, lki:1, lkm:1, lko:1, ro:.09, ru:.10, rg:.042, rs:1, rpo:0, rpu:0, pa:0.50, pb:0.50, pin:0.00, pdown:0.00}),
+    Object.freeze({name:'polly-blush', atlas:11, w:0.39045, h:0.39045, ex:1, r:1, e:0, taper:0, tilt:0, bend:0, peak:0, lon:0.31, lat:0.014, amin:99, sq:.18, top:1, ck:.28, slant:0, cutc:9, cutk:0, asw:0, ahy:0, atilt:-0.08, lki:1, lkm:1, lko:1, ro:.09, ru:.10, rg:.042, rs:1, rpo:0, rpu:0, pa:0.16, pb:0.16, pin:0.18, pdown:0.28}),
   ]);
   const LID0=REST.w/REST.h;               // lid at which the stadium reaches a circle (fade starts below it)
   /* Box for any shape. Lid/blink close it vertically: hh goes from the natural height to round (hh = hw)
@@ -138,7 +133,7 @@
     return o;
   }
   function eyeShapeV(o,v){
-    const S=SHAPES[v[2]|0]||SHAPES[0], s=Math.max(0,v[0]), l=Math.max(0,v[1]);
+    const Si=v[2]|0; const S=(typeof window!=="undefined"&&window.__SHAPE_MUT&&window.__SHAPE_MUT[Si])||SHAPES[Si]||SHAPES[0], s=Math.max(0,v[0]), l=Math.max(0,v[1]);
     if(S.top){                                                         // real-lid shapes ('ref')
       const hp=clamp(v[3]||0,0,1), sc=1-S.sq*hp;                      // happy squint: shrink toward the bottom
       const hwN=S.w*s/2, hhN=S.h*s/2;
@@ -222,12 +217,22 @@
     let x=c*wu+side*s*wv; const y=-side*s*wu+c*wv, yn=clamp(y/hh,-1,1);
     x-=side*P.bend*hw*(1-yn*yn);
     const g=1-P.taper*yn; x/=g;
-    const r=P.r*hw, qx=Math.abs(x)-hw+r, qy=Math.abs(y)-hh+r;
+    const peak=P.peak||0;
+    if(peak>1e-5) x+=(-side)*peak*y;                                   // parallelogram shear (top → inward)
+    let r=P.r*hw;
+    if(peak>1e-5) r=r*(1-Math.min(1,peak*1.8))+Math.min(r,0.18*hw)*Math.min(1,peak*1.8);
+    const qx=Math.abs(x)-hw+r, qy=Math.abs(y)-hh+r;
     const dR=len(Math.max(qx,0),Math.max(qy,0))+Math.min(Math.max(qx,qy),0)-r;
-    const d=(dR+(sdEllipse(x,y,hw,hh)-dR)*P.e)*g*(rs*js);
+    let d=(dR+(sdEllipse(x,y,hw,hh)-dR)*P.e)*g*(rs*js);
     if(!C) return d;
     const lu=u-rx, lv=v-ry;                                            // lid lines ride with the rim (lash line)
-    const e=A?smax(d,(side<0?C.nLx:C.nRx)*lu+(side<0?C.nLy:C.nRy)*lv-C.cut,C.cutk):d;   // soft slanted cut / expression lid
+    const nLx=C.nLx, nLy=C.nLy, nRx=C.nRx, nRy=C.nRy;
+    let e=A?Math.max(d,(side<0?nLx:nRx)*lu+(side<0?nLy:nRy)*lv-C.cut):d;  // hard hood cut (matches shader)
+    if(A&&peak>1e-5){
+      const cx=side<0?nLx:nRx, cy=side<0?nLy:nRy;
+      const ox=cx+side*peak*0.95, oy=cy-0.20*peak, ol=Math.sqrt(ox*ox+oy*oy)||1;
+      e=Math.max(e,(ox/ol)*lu+(oy/ol)*lv-(C.cut-peak*hh*0.40));
+    }
     return smax(e,lv-C.vtop,C.ck)*Math.min(sx,1);
   }
   /* ---- toon layer (the drawing tutorial's eyes), for every shape ----

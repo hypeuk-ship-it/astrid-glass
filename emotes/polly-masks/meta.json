@@ -1,0 +1,234 @@
+{
+  "ids": [
+    "cheerful",
+    "confident",
+    "bored",
+    "angry",
+    "sleepy",
+    "smug",
+    "furious",
+    "starry",
+    "pleading",
+    "love",
+    "dizzy",
+    "blush"
+  ],
+  "eyes": {
+    "cheerful": {
+      "L": {
+        "file": "emotes/polly-masks/cheerful-L.png",
+        "w": 116,
+        "h": 144,
+        "cx": 45.408756656242076,
+        "cy": 68.62386949539345,
+        "area": 11831
+      },
+      "R": {
+        "file": "emotes/polly-masks/cheerful-R.png",
+        "w": 116,
+        "h": 144,
+        "cx": 69.59124334375792,
+        "cy": 68.62386949539345,
+        "area": 11831
+      }
+    },
+    "confident": {
+      "L": {
+        "file": "emotes/polly-masks/confident-L.png",
+        "w": 155,
+        "h": 126,
+        "cx": 72.82097931916708,
+        "cy": 65.16089830147112,
+        "area": 14071
+      },
+      "R": {
+        "file": "emotes/polly-masks/confident-R.png",
+        "w": 155,
+        "h": 126,
+        "cx": 81.17902068083293,
+        "cy": 65.16089830147112,
+        "area": 14071
+      }
+    },
+    "bored": {
+      "L": {
+        "file": "emotes/polly-masks/bored-L.png",
+        "w": 167,
+        "h": 128,
+        "cx": 84.34983040394697,
+        "cy": 73.11440024668516,
+        "area": 12972
+      },
+      "R": {
+        "file": "emotes/polly-masks/bored-R.png",
+        "w": 167,
+        "h": 128,
+        "cx": 81.65016959605305,
+        "cy": 73.11440024668516,
+        "area": 12972
+      }
+    },
+    "angry": {
+      "L": {
+        "file": "emotes/polly-masks/angry-L.png",
+        "w": 124,
+        "h": 119,
+        "cx": 61.06287970838396,
+        "cy": 61.51792223572298,
+        "area": 9876
+      },
+      "R": {
+        "file": "emotes/polly-masks/angry-R.png",
+        "w": 124,
+        "h": 119,
+        "cx": 61.937120291616026,
+        "cy": 61.51792223572298,
+        "area": 9876
+      }
+    },
+    "sleepy": {
+      "L": {
+        "file": "emotes/polly-masks/sleepy-L.png",
+        "w": 137,
+        "h": 137,
+        "cx": 54.5417239632337,
+        "cy": 68.05543895201563,
+        "area": 13817
+      },
+      "R": {
+        "file": "emotes/polly-masks/sleepy-R.png",
+        "w": 137,
+        "h": 137,
+        "cx": 81.45827603676628,
+        "cy": 68.05543895201563,
+        "area": 13817
+      }
+    },
+    "smug": {
+      "L": {
+        "file": "emotes/polly-masks/smug-L.png",
+        "w": 190,
+        "h": 100,
+        "cx": 84.19272099772532,
+        "cy": 50.12730410228252,
+        "area": 12749
+      },
+      "R": {
+        "file": "emotes/polly-masks/smug-R.png",
+        "w": 190,
+        "h": 100,
+        "cx": 104.8072790022747,
+        "cy": 50.12730410228252,
+        "area": 12749
+      }
+    },
+    "furious": {
+      "L": {
+        "file": "emotes/polly-masks/furious-L.png",
+        "w": 147,
+        "h": 115,
+        "cx": 74.7457765667575,
+        "cy": 58.075022706630335,
+        "area": 11010
+      },
+      "R": {
+        "file": "emotes/polly-masks/furious-R.png",
+        "w": 147,
+        "h": 115,
+        "cx": 71.25422343324249,
+        "cy": 58.075022706630335,
+        "area": 11010
+      }
+    },
+    "starry": {
+      "L": {
+        "file": "emotes/polly-masks/starry-L.png",
+        "w": 123,
+        "h": 131,
+        "cx": 63.14042087146993,
+        "cy": 67.03645466635376,
+        "area": 12783
+      },
+      "R": {
+        "file": "emotes/polly-masks/starry-R.png",
+        "w": 123,
+        "h": 131,
+        "cx": 58.85957912853007,
+        "cy": 67.03645466635376,
+        "area": 12783
+      }
+    },
+    "pleading": {
+      "L": {
+        "file": "emotes/polly-masks/pleading-L.png",
+        "w": 168,
+        "h": 155,
+        "cx": 72.19858945805494,
+        "cy": 90.85207869339271,
+        "area": 10776
+      },
+      "R": {
+        "file": "emotes/polly-masks/pleading-R.png",
+        "w": 168,
+        "h": 155,
+        "cx": 94.80141054194507,
+        "cy": 90.85207869339271,
+        "area": 10776
+      }
+    },
+    "love": {
+      "L": {
+        "file": "emotes/polly-masks/love-L.png",
+        "w": 133,
+        "h": 104,
+        "cx": 74.28973996300729,
+        "cy": 53.44967903383744,
+        "area": 9191
+      },
+      "R": {
+        "file": "emotes/polly-masks/love-R.png",
+        "w": 133,
+        "h": 104,
+        "cx": 57.71026003699271,
+        "cy": 53.44967903383744,
+        "area": 9191
+      }
+    },
+    "dizzy": {
+      "L": {
+        "file": "emotes/polly-masks/dizzy-L.png",
+        "w": 143,
+        "h": 127,
+        "cx": 58.93025241981401,
+        "cy": 61.997532738660084,
+        "area": 10538
+      },
+      "R": {
+        "file": "emotes/polly-masks/dizzy-R.png",
+        "w": 117,
+        "h": 127,
+        "cx": 61.24669735788632,
+        "cy": 62.80834667734189,
+        "area": 9992
+      }
+    },
+    "blush": {
+      "L": {
+        "file": "emotes/polly-masks/blush-L.png",
+        "w": 150,
+        "h": 131,
+        "cx": 66.74475927205712,
+        "cy": 64.43154419104661,
+        "area": 13023
+      },
+      "R": {
+        "file": "emotes/polly-masks/blush-R.png",
+        "w": 151,
+        "h": 131,
+        "cx": 82.84314771082501,
+        "cy": 64.37784718519083,
+        "area": 13127
+      }
+    }
+  }
+}
