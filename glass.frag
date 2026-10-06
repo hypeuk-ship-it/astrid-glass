@@ -39,11 +39,14 @@ uniform vec4  uEyeP;    // eyes: -, -, lidFade (morph-blended), capsule radius (
 uniform vec4  uEyeA;    // eye box (radians): half width, half visible height (morph-blended), 1/hw, 1/hh
 uniform vec4  uShape;   // eye shape params: corner radius ×hw, ellipse weight, egg taper, -
 uniform vec4  uShapeT;  // eye shape params: cos lean, sin lean, bean bow ×hw, rest lon of the eyes (±)
-uniform vec4  uAsym;    // toon shape: width scale ±(1 + side·x), height offset (side·y), top cut height, cut corner k
-uniform vec4  uCutN;    // slanted top cut normal: left eye (xy), right eye (zw)
+uniform vec4  uAsym;    // toon shape: width scale ±(1 + side·x), height offset (side·y), cut / expression-lid height, its corner k
+uniform vec4  uCutN;    // cut / expression-lid line normal: left eye (xy), right eye (zw)
+uniform vec4  uLat;     // fixed lattice warp ('toon'; 1,1,1 = none): 1/k of the bottom row inner, mid, outer; 1/(1.4·hw)
 uniform vec4  uToon;    // toon layer: rim alpha (0 = off → skipped), pupil alpha (0 = off), rim grow (rad), -
 uniform vec4  uToonR;   // toon rim offset (rad): outward, up, -, -
-uniform vec4  uPupil;   // pupil centre (rad, eye-local): inward rest, gaze u, v, -
+uniform vec4  uRimP;    // toon rim after the shared warp ('toon'; 0,0,1 = none): outward, up (rad), scale, -
+uniform vec4  uPupil;   // pupil centre (rad, eye-local): inward rest, gaze u, v; SDF scale of the dart stretch
+uniform mat2  uPupilM;  // pupil dart stretch: eye-local → pupil frame (identity at rest)
 uniform vec4  uPupilA;  // pupil semi-axes a, b and 1/a, 1/b (rad)
 uniform vec3  uToonCol; // toon ink: the coat's dark/mark tone
 uniform vec4  uShadow;  // eye drop shadow: strength, lat offset down (rad), gauss k (exp2), -
@@ -80,16 +83,25 @@ vec3 tint(vec3 col, vec3 c, float a){
 // ---- eye shapes: ONE parametric SDF in eye-local sphere coords (radians; < 0 inside), box b = (half w,
 // half h). Every shape is a parameter set (face.js SHAPES / eyeSDFP): stadium = rounded box with r = hw,
 // squircle r = .55hw, dot = round box, oval = ellipse, egg = tapered ellipse, bean = leaning bowed ellipse,
-// ref = plump (mostly ellipse) egg leaning outward; toon = rounded ellipse with a soft slanted top cut + 3/4 asymmetry.
+// ref = plump (mostly ellipse) egg leaning outward; toon = ellipse whose lower half a fixed lattice squashes up.
 // A shape switch lerps the params on the CPU → no branches, one evaluation per tap, even mid-morph.
 // smooth max: rounds the corner where the lid line meets the shape by ~k
 float smax(float a, float c, float k){ float h = max(k - abs(a - c), 0.0) / k; return max(a, c) + h * h * k * 0.25; }
-float eyeSDF(vec2 p, vec2 b, float side){
-  float sx = 1.0 + side * uAsym.x;                                        // 3/4 asymmetry ('toon'; 0 otherwise):
+// rp = rim transform applied after the shared lattice warp ('toon' rim: outward, up, scale; vec3(0,0,1) = none).
+float eyeSDF(vec2 p, vec2 b, float side, vec3 rp){
+  float sx = 1.0 + side * uAsym.x;                                        // 3/4 asymmetry ('toon' slider; 0 otherwise):
   p.y += side * uAsym.y; p.x /= sx;                                       //  per-eye width + height
   p.y -= uShapeC.x;                                                       // squint: centre drops ('top' shapes)
   vec2 ib = uEyeA.zw;                                                     // 1/b (CPU)
-  vec2 q = vec2(uShapeT.x * p.x + side * uShapeT.y * p.y, -side * uShapeT.y * p.x + uShapeT.x * p.y);  // lean
+  // ONE fixed 3×3 lattice ('toon'; identity otherwise): only the bottom row moves → below the centre the sample
+  // is pulled down by w = lerp(1/k) across the columns (inner · mid · outer); js keeps the SDF ~unit (continuous)
+  float f = clamp(-side * p.x * uLat.w, -1.0, 1.0);
+  float wl = uLat.y + (f > 0.0 ? uLat.x - uLat.y : uLat.y - uLat.z) * f;
+  vec2 pw = vec2(p.x, p.y < 0.0 ? p.y * wl : p.y);
+  float js = 1.0 / (1.0 + (wl - 1.0) * clamp(-2.0 * p.y * ib.y, 0.0, 1.0));
+  vec2 ro = vec2(side * rp.x, rp.y);
+  pw = (pw - ro) / rp.z;                                                  // rim: the same white scaled + moved (shared warp)
+  vec2 q = vec2(uShapeT.x * pw.x + side * uShapeT.y * pw.y, -side * uShapeT.y * pw.x + uShapeT.x * pw.y);  // lean
   float yn = clamp(q.y * ib.y, -1.0, 1.0);
   q.x -= side * uShapeT.z * b.x * (1.0 - yn * yn);                       // bow
   float g = 1.0 - uShape.z * yn; q.x /= g;                                // taper (egg)
@@ -98,9 +110,10 @@ float eyeSDF(vec2 p, vec2 b, float side){
   vec2 e0 = q * ib, e1 = e0 * ib;                                         // ellipse (gradient-normalised
   float k0 = length(e0);                                                  //  approx, exact on the edge)
   float dE = k0 * (k0 - 1.0) * inversesqrt(max(dot(e1, e1), 1e-8));
-  float d = mix(dR, dE, uShape.y) * g;
-  d = smax(d, dot(p, side < 0.0 ? uCutN.xy : uCutN.zw) - uAsym.z, uAsym.w);   // soft slanted top cut ('toon'; parked)
-  return smax(d, p.y - uShapeC.y, uShapeC.z) * min(sx, 1.0);              // lid from the top ('top' shapes; parked)
+  float d = mix(dR, dE, uShape.y) * g * (rp.z * js);
+  vec2 pl = p - ro;                                                       // lid lines ride with the rim (lash line)
+  d = smax(d, dot(pl, side < 0.0 ? uCutN.xy : uCutN.zw) - uAsym.z, uAsym.w);   // cut / expression lid (parked = none)
+  return smax(d, pl.y - uShapeC.y, uShapeC.z) * min(sx, 1.0);             // lid from the top ('top' shapes; parked)
 }
 
 // eye shading for one chroma tap, given its sphere coordinates (lon, lat) and visible-hemisphere Z
@@ -110,7 +123,7 @@ vec3 eyeTap(vec3 col, float lon, float lat, float Z, float rimA){
   float u = lon - uShapeT.w * side;
   // happy: eyes lift a touch and bow into a soft ∩ (edges droop) — any shape, never flatter than round
   float v = lat - uEyeK2.z + uEyeK2.w * u * u;
-  float d = eyeSDF(vec2(u, v), uEyeA.xy, side);                            // radians
+  float d = eyeSDF(vec2(u, v), uEyeA.xy, side, vec3(0.0, 0.0, 1.0));      // radians
   float ds = d * RR * (0.5 * Z + 0.5);                        // ≈ screen units (foreshortened)
   float w  = uEyeK.x;
   float vis = uEyeP.z * smoothstep(0.02, 0.08, Z);            // lidFade · z>0.02 cull
@@ -130,10 +143,10 @@ vec3 eyeTap(vec3 col, float lon, float lat, float Z, float rimA){
 #ifdef TOON
   if (uToon.y > 0.0 && rimA >= 0.0) {
     float psx = 1.0 + side * uAsym.x;                           // pupils follow the 3/4 asymmetry
-    vec2 pq = vec2(u / psx + side * uPupil.x - uPupil.y, v + side * uAsym.y - uPupil.z);
+    vec2 pq = uPupilM * vec2(u / psx + side * uPupil.x - uPupil.y, v + side * uAsym.y - uPupil.z);   // dart stretch
     vec2 p0 = pq * uPupilA.zw, p1 = p0 * uPupilA.zw;
     float pk = length(p0);
-    float dp = pk * (pk - 1.0) * inversesqrt(max(dot(p1, p1), 1e-8)) * min(psx, 1.0) * RR * (0.5 * Z + 0.5);
+    float dp = pk * (pk - 1.0) * inversesqrt(max(dot(p1, p1), 1e-8)) * min(psx, 1.0) * uPupil.w * RR * (0.5 * Z + 0.5);
     gPupil = uToon.y * vis * (1.0 - smoothstep(-w, w, max(dp, ds)));
   }
 #endif
@@ -147,19 +160,20 @@ vec3 eyeShadow(vec3 col, float lon, float lat, float Z){
   float side = lon < 0.0 ? -1.0 : 1.0;
   float u = lon - uShapeT.w * side;
   float v = lat - uEyeK2.z + uEyeK2.w * u * u + uShadow.y;
-  float ds = eyeSDF(vec2(u, v), uEyeA.xy, side) * RR * (0.5 * Z + 0.5);
+  float ds = eyeSDF(vec2(u, v), uEyeA.xy, side, vec3(0.0, 0.0, 1.0)) * RR * (0.5 * Z + 0.5);
   float sh = uShadow.x * uEyeP.z * smoothstep(0.02, 0.08, Z) * g2(max(ds, 0.0), uShadow.z);
   return col * mix(vec3(1.0), uDeep * 0.85, sh);
 }
 #ifdef TOON
-// toon rim (face.js sdToonRim): the eye SDF grown a little and shifted up + outward, drawn BEHIND the white,
-// so only a crescent shows — thick at the top-outer edge, tapering to nothing low and inside (a lid/lash line).
+// toon rim (face.js sdToonRim): the eye SDF grown a little and shifted up + outward (classic shapes) or, for
+// 'toon', the same white scaled + moved after the shared lattice warp (uRimP), drawn BEHIND the white, so only
+// a crescent shows — thick at the top-outer edge, tapering to nothing low and inside (a lid/lash line).
 // Once per pixel (centre tap); the white's own taps then cover it with the usual cyan split on the edge.
 float eyeRim(float lon, float lat, float Z){
   float side = lon < 0.0 ? -1.0 : 1.0;
   float u = lon - uShapeT.w * side;
   float v = lat - uEyeK2.z + uEyeK2.w * u * u;
-  float d = eyeSDF(vec2(u - side * uToonR.x, v - uToonR.y), uEyeA.xy, side) - uToon.z;
+  float d = eyeSDF(vec2(u - side * uToonR.x, v - uToonR.y), uEyeA.xy, side, uRimP.xyz) - uToon.z;
   float vis = uEyeP.z * smoothstep(0.02, 0.08, Z);
   return uToon.x * vis * (1.0 - smoothstep(-uEyeK.x, uEyeK.x, d * RR * (0.5 * Z + 0.5)));
 }
