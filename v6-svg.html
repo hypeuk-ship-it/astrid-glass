@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Astrid · glass</title>
+<style>
+  :root{--paper:#e9e9eb;--ink:#4a5568}
+  html,body{margin:0;height:100%;background:var(--paper);overflow:hidden;transition:background .4s}
+  body{display:grid;place-items:center;font:500 12px/1 -apple-system,"Instrument Sans",system-ui,sans-serif;color:var(--ink)}
+  .stage{position:relative;width:min(84vmin,620px);aspect-ratio:1;cursor:pointer;--u:calc(min(84vmin,620px) / 340)}
+  .stage svg{position:absolute;inset:0;width:100%;height:100%;display:block}
+  #bg{will-change:transform}
+  #eyes{will-change:transform,filter;filter:blur(1.3px)}
+  /* inner gradients: clipped to the orb, moved as a GPU layer (head turn) */
+  #orbClip{position:absolute;left:15.294%;top:15.294%;width:69.412%;height:69.412%;border-radius:50%;overflow:hidden;pointer-events:none}
+  #coreMove{position:absolute;inset:0;will-change:transform;transform-origin:50% 50%}
+  .drift{position:absolute;inset:-25%;will-change:transform;transform-origin:50% 57%}
+  .blob{position:absolute;inset:0;filter:blur(calc(var(--u) * 4.5))}
+  #top{pointer-events:none}
+  .coats{position:fixed;left:0;right:0;bottom:22px;display:flex;justify-content:center;gap:10px;align-items:center}
+  .coats button{width:22px;height:22px;border-radius:50%;border:1px solid rgba(0,0,0,.15);cursor:pointer;padding:0;outline-offset:3px}
+  .coats button[aria-pressed=true]{outline:1.5px solid var(--ink)}
+  .coats .mode{width:auto;height:22px;border-radius:11px;padding:0 10px;background:transparent;color:var(--ink);font:inherit;border-color:currentColor;opacity:.7}
+</style>
+</head>
+<body>
+<!-- Geometry = AstridFace.swift: canvas 240, orb r118, projector RR 110,
+     rest eyes lon ±0.2 lat 0.04, stadium w 0.23 h 0.52 (never flatter than a circle).
+     Coats are read from ColorWay (EInkPalette.swift) desk.paper / orb / mark — read-only. -->
+<div class="stage" id="astrid">
+<svg id="bg" viewBox="-50 -50 340 340" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Gaussian glass for the body only (static; rendered once per coat change) -->
+    <filter id="glass" filterUnits="userSpaceOnUse" x="-90" y="-90" width="420" height="420" color-interpolation-filters="sRGB">
+      <feTurbulence type="fractalNoise" baseFrequency="0.012 0.018" numOctaves="2" seed="4" result="n"/>
+      <feDisplacementMap in="SourceGraphic" in2="n" scale="6" xChannelSelector="R" yChannelSelector="G" result="d0"/>
+      <feGaussianBlur in="d0" stdDeviation="2" result="d"/>
+      <feColorMatrix in="d" type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0" result="r"/>
+      <feOffset in="r" dx="2.4" dy="-.8" result="ro"/>
+      <feColorMatrix in="d" type="matrix" values="0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0" result="g"/>
+      <feColorMatrix in="d" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0" result="b"/>
+      <feOffset in="b" dx="-2.4" dy=".8" result="bo"/>
+      <feBlend in="ro" in2="g" mode="screen" result="rg"/>
+      <feBlend in="rg" in2="bo" mode="screen"/>
+    </filter>
+    <filter id="soft"  x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="4.5"/></filter>
+    <filter id="halo"  x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="9"/></filter>
+    <filter id="shadow" x="-30%" y="-200%" width="160%" height="500%"><feGaussianBlur stdDeviation="6"/></filter>
+    <filter id="glint" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation=".7"/></filter>
+
+    <radialGradient id="body" gradientUnits="userSpaceOnUse" cx="120" cy="146" r="128">
+      <stop id="b0" offset="0"/><stop id="b1" offset=".3"/><stop id="b2" offset=".55"/>
+      <stop id="b3" offset=".76"/><stop id="b4" offset=".93"/><stop id="b5" offset="1"/>
+    </radialGradient>
+    <!-- depth: deeper tone pooling at the bottom -->
+    <radialGradient id="depth" gradientUnits="userSpaceOnUse" cx="120" cy="214" r="110">
+      <stop id="d0s" offset="0" stop-opacity=".55"/><stop id="d1s" offset="1" stop-opacity="0"/>
+    </radialGradient>
+    <!-- soft inner iridescence just inside the edge -->
+    <radialGradient id="rimGlow" gradientUnits="userSpaceOnUse" cx="120" cy="120" r="118">
+      <stop offset=".8"  stop-color="#ff9fe0" stop-opacity="0"/>
+      <stop offset=".9"  stop-color="#ff9fe0" stop-opacity=".22"/>
+      <stop offset=".95" stop-color="#c4a6ff" stop-opacity=".24"/>
+      <stop offset="1"   stop-color="#9fe6ff" stop-opacity=".2"/>
+    </radialGradient>
+    <!-- crisp iridescent edge: pink → lavender → cyan → peach → pink -->
+    <linearGradient id="edge" gradientUnits="userSpaceOnUse" x1="20" y1="20" x2="220" y2="220">
+      <stop offset="0"   stop-color="#8fe3ff"/>
+      <stop offset=".28" stop-color="#c4a6ff"/>
+      <stop offset=".5"  stop-color="#ff9fe0"/>
+      <stop offset=".75" stop-color="#ffd2a6"/>
+      <stop offset="1"   stop-color="#8fe3ff"/>
+    </linearGradient>
+    <radialGradient id="sheen" cx=".5" cy=".5" r=".5">
+      <stop offset="0" stop-color="#fff" stop-opacity=".5"/><stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="shadowG" cx=".5" cy=".5" r=".5">
+      <stop id="sh0" offset="0" stop-opacity=".28"/><stop id="sh1" offset="1" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect id="paperRect" x="-90" y="-90" width="420" height="420"/>
+  <g filter="url(#glass)">
+    <rect id="paperRect2" x="-90" y="-90" width="420" height="420"/>
+    <!-- contact shadow: she sits on the page -->
+    <ellipse cx="120" cy="252" rx="84" ry="8" fill="url(#shadowG)" filter="url(#shadow)"/>
+    <circle id="haloC" cx="120" cy="120" r="130" opacity=".75" filter="url(#halo)"/>
+    <circle cx="120" cy="120" r="118" fill="url(#body)" filter="url(#soft)"/>
+    <circle cx="120" cy="120" r="118" fill="url(#rimGlow)"/>
+  </g>
+</svg>
+
+<div id="orbClip"><div id="coreMove"><div class="drift" id="dB"><div class="blob" id="blobB"></div></div><div class="drift" id="dA"><div class="blob" id="blobA"></div></div><div class="drift" id="dC"><div class="blob" id="blobC"></div></div></div></div>
+<svg id="top" viewBox="-50 -50 340 340" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="soft2" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="4.5"/></filter>
+    <filter id="glint2" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation=".7"/></filter>
+  </defs>
+  <!-- room light: sheen, edge and glint stay fixed while the head turns -->
+  <ellipse cx="100" cy="54" rx="56" ry="24" fill="url(#sheen)" filter="url(#soft2)"/>
+  <!-- crisp layer: edge + glint stay sharp so it reads as solid glass -->
+  <circle cx="120" cy="120" r="117.6" fill="none" stroke="url(#edge)" stroke-width="1.5" opacity=".9"/>
+  <circle id="innerLine" cx="120" cy="120" r="115.8" fill="none" stroke="#fff" stroke-width=".8" opacity=".55"/>
+  <ellipse cx="74" cy="44" rx="13" ry="5.5" transform="rotate(-36 74 44)" fill="#fff" opacity=".92" filter="url(#glint2)"/>
+  <circle cx="92" cy="33" r="2.2" fill="#fff" opacity=".8" filter="url(#glint2)"/>
+</svg>
+<svg id="eyes" viewBox="-50 -50 340 340" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="egg" x1="0" y1="0" x2=".35" y2="1">
+      <stop id="e0" offset="0"/><stop id="e1" offset=".55"/><stop id="e2" offset="1"/>
+    </linearGradient>
+    <path id="eyeL"/><path id="eyeR"/>
+  </defs>
+  <!-- per eye: glow (embeds it in the glass), cyan + pink fringe (grows toward the edge), body -->
+  <g id="gL">
+    <use href="#eyeL" class="glow" fill="none" stroke-width="5" stroke-linejoin="round" opacity=".28"/>
+    <use href="#eyeL" class="fc" fill="#7fe6ff" opacity=".85"/>
+    <use href="#eyeL" class="fp" fill="#ff8fdc" opacity=".85"/>
+    <use href="#eyeL" fill="url(#egg)"/>
+  </g>
+  <g id="gR">
+    <use href="#eyeR" class="glow" fill="none" stroke-width="5" stroke-linejoin="round" opacity=".28"/>
+    <use href="#eyeR" class="fc" fill="#7fe6ff" opacity=".85"/>
+    <use href="#eyeR" class="fp" fill="#ff8fdc" opacity=".85"/>
+    <use href="#eyeR" fill="url(#egg)"/>
+  </g>
+</svg>
+</div>
+<div class="coats" id="coats"></div>
+
+<script>
+/* ---------- coats: read from ColorWay desk (paper, orb, mark) as [light, dark] ---------- */
+const COATS={
+  cream:    {paper:['faf8f3','14130f'],orb:['faf8f3','050505'],mark:['111111','faf8f3']},
+  carbon:   {paper:['08090c','08090c'],orb:['05060a','05060a'],mark:['c5ccd6','c5ccd6']},
+  sumi:     {paper:['e8f0e4','121310'],orb:['c5cbb8','121310'],mark:['1a1c16','e8f0e4']},
+  manila:   {paper:['f4ead0','1c150c'],orb:['e6c48a','1c150c'],mark:['1a2744','f0d8a8']},
+  cyanotype:{paper:['d6eef8','0a1822'],orb:['7eb3cc','0a1822'],mark:['003153','b8d4e4']},
+  violet:   {paper:['f0e5f9','160a22'],orb:['c9a0e4','08040e'],mark:['2b1548','e4c8f6']},
+};
+const hx=h=>{h=h.replace('#','');return [0,2,4].map(i=>parseInt(h.slice(i,i+2),16))};
+const toHex=a=>'#'+a.map(v=>Math.round(Math.max(0,Math.min(255,v))).toString(16).padStart(2,'0')).join('');
+const mix=(a,b,t)=>toHex(hx(a).map((v,i)=>v+(hx(b)[i]-v)*t));
+const lum=h=>{const [r,g,b]=hx(h);return (.2126*r+.7152*g+.0722*b)/255};
+
+function palette(name,dark){
+  if(name==='glass') return dark
+    ? {paper:'#0b0d14',core:'#3d82f2',deep:'#1d4fb8',mid:'#5f86c8',edge:'#1a2236',halo:'#141b2c',eye:'#ffffff',eyeHi:'#ffffff',eyeLo:'#cfe0fb',glow:'#9cc4ff',shadow:'#000000',ink:'#9aa6bd',inner:.25}
+    : {paper:'#e9e9eb',core:'#3d82f2',deep:'#2a63d6',mid:'#a3c5f8',edge:'#fbf8fe',halo:'#ffffff',eye:'#ffffff',eyeHi:'#ffffff',eyeLo:'#cfe0fb',glow:'#ffffff',shadow:'#2a3d66',ink:'#4a5568',inner:.55};
+  const c=COATS[name],i=dark?1:0,paper='#'+c.paper[i],orb='#'+c.orb[i],mark='#'+c.mark[i];
+  const isDark=lum(paper)<.3;
+  let core=Math.abs(lum(orb)-lum(paper))<.08 ? mix(orb,mark,isDark?.16:.2) : mix(orb,mark,.1);
+  const edge=isDark?mix(paper,mark,.1):mix(paper,'#ffffff',.6);
+  const mid=mix(core,edge,.45);
+  return {paper,core,deep:mix(core,mark,.22),mid,edge,halo:isDark?mix(paper,mark,.07):'#ffffff',
+          eye:mark,eyeHi:mix(mark,isDark?'#ffffff':edge,.3),eyeLo:mix(mark,core,.35),
+          glow:isDark?mix(mark,core,.4):'#ffffff',shadow:isDark?'#000000':mark,ink:mix(mark,paper,.3),inner:isDark?.2:.55};
+}
+const $=id=>document.getElementById(id), stop=(id,c)=>$(id).setAttribute('stop-color',c);
+function applyCoat(name,dark){
+  const p=palette(name,dark);
+  document.documentElement.style.setProperty('--paper',p.paper);
+  document.documentElement.style.setProperty('--ink',p.ink);
+  $('paperRect').setAttribute('fill',p.paper); $('paperRect2').setAttribute('fill',p.paper);
+  $('haloC').setAttribute('fill',p.halo);
+  stop('b0',p.mid); stop('b1',p.mid); stop('b2',p.mid);
+  stop('b3',mix(p.mid,p.edge,.6)); stop('b4',p.edge); stop('b5',p.edge);
+  const a=(h,o)=>{const [r,g,b]=hx(h);return `rgba(${r},${g},${b},${o})`};
+  $('blobA').style.background=`radial-gradient(36% 36% at 50% 57.33%, ${p.core} 0%, ${mix(p.core,p.mid,.4)} 30%, ${a(p.mid,.6)} 50%, ${a(p.mid,0)} 62%)`;
+  $('blobB').style.background=`radial-gradient(31.33% 31.33% at 50% 76.67%, ${a(p.deep,.6)} 0%, ${a(p.deep,0)} 100%)`;
+  const tint=mix(p.core,p.mid,.6);
+  $('blobC').style.background=`radial-gradient(20% 16% at 42% 50%, ${a(tint,.75)} 0%, ${a(tint,0)} 100%)`;
+  stop('sh0',p.shadow); stop('sh1',p.shadow);
+  stop('e0',p.eyeHi); stop('e1',p.eye); stop('e2',p.eyeLo);
+  $('innerLine').setAttribute('opacity',p.inner);
+  document.querySelectorAll('.glow').forEach(u=>u.setAttribute('stroke',p.glow));
+  localStorage.setItem('astridCoat',JSON.stringify({name,dark}));
+  document.querySelectorAll('.coats button[data-c]').forEach(b=>b.setAttribute('aria-pressed',b.dataset.c===name));
+  $('modeBtn').textContent=dark?'Dark':'Light';
+  state={name,dark};
+}
+let state=JSON.parse(localStorage.getItem('astridCoat')||'{"name":"glass","dark":false}');
+const bar=$('coats');
+['glass',...Object.keys(COATS)].forEach(n=>{
+  const b=document.createElement('button'); b.dataset.c=n; b.title=n[0].toUpperCase()+n.slice(1);
+  b.style.background = n==='glass' ? 'radial-gradient(circle at 50% 65%,#3d82f2,#cfe0fb)' : '#'+(COATS[n].orb[0]===COATS[n].paper[0]?COATS[n].mark[0]:COATS[n].orb[0]);
+  b.onclick=e=>{e.stopPropagation();applyCoat(n,state.dark)}; bar.appendChild(b);
+});
+const mb=document.createElement('button'); mb.id='modeBtn'; mb.className='mode';
+mb.onclick=e=>{e.stopPropagation();applyCoat(state.name,!state.dark)}; bar.appendChild(mb);
+applyCoat(state.name,state.dark);
+
+/* ---------- port of AstridFace.projector + eyePath + stadiumOf + lidFade ---------- */
+const CX=120, CY=120, RR=110, REST={lon:.2, lat:.04, w:.23, h:.52};
+function projector(yaw,pitch,roll){
+  const cp=Math.cos(pitch),sp=Math.sin(pitch),cy=Math.cos(yaw),sy=Math.sin(yaw),cr=Math.cos(roll),sr=Math.sin(roll);
+  return (lon,lat)=>{
+    let x=Math.cos(lat)*Math.sin(lon), y=Math.sin(lat), z=Math.cos(lat)*Math.cos(lon);
+    const y1=y*cp-z*sp; z=y*sp+z*cp; y=y1;
+    const x2=x*cy+z*sy; z=-x*sy+z*cy; x=x2;
+    return {x:CX+RR*(x*cr-y*sr), y:CY-RR*(x*sr+y*cr), z};
+  };
+}
+function stadiumOf(e){ const s=Math.max(0,e.s); let w=REST.w*s; const h=REST.h*s; if(h<w) w=h; return [w,h]; }
+function lidFade(e){ const [w,h]=stadiumOf(e); if(w<=0) return 0; return e.lid*h<w ? Math.max(0,e.lid*h/w) : 1; }
+function eyePts(e,xf){
+  const n=20,[w,h]=stadiumOf(e),vis=Math.max(w,h*e.lid),hw=w/2,hh=vis/2,r=hw,cap=Math.max(0,hh-r),c=Math.cos(e.rot),sn=Math.sin(e.rot),pts=[];
+  const add=(u,v)=>{const u2=u*c-v*sn,v2=u*sn+v*c,p=xf(e.lon+u2,e.lat+v2); if(p.z>.02) pts.push(p);};
+  for(let i=0;i<=n;i++){const a=Math.PI-(i/n)*Math.PI; add(hw*Math.cos(a),cap+r*Math.sin(a));}
+  for(let i=0;i<=n;i++){const a=-(i/n)*Math.PI; add(hw*Math.cos(a),-cap+r*Math.sin(a));}
+  return pts;
+}
+const toD=pts=>pts.length<6?'':'M'+pts.map(p=>p.x.toFixed(2)+' '+p.y.toFixed(2)).join('L')+'Z';
+
+/* ---------- velocity springs (rig: springs, no sine aliveness) ---------- */
+const spring=(x,k,d)=>({x,v:0,t:x,k,d});
+const step=s=>{s.v=(s.v+(s.t-s.x)*s.k)*s.d; s.x+=s.v;};
+const yaw=spring(0,.07,.74), pitch=spring(0,.07,.74), size=spring(1,.16,.62), lid=spring(1,.45,.5);
+/* follow-through: the glass core chases the eyes' pose from ~110ms ago on a heavier, softer spring */
+const cYaw=spring(0,.022,.72), cPitch=spring(0,.022,.72), LAG=110, hist=[];
+
+const coreMove=$('coreMove');
+/* glass life: each blob wanders to random poses on a very soft spring (random targets, no sine) */
+const mkDrift=(id,amp)=>({el:$(id),amp,x:spring(0,.006,.9),y:spring(0,.006,.9),sx:spring(1,.006,.9),sy:spring(1,.006,.9),r:spring(0,.005,.9),next:0});
+const drifts=[mkDrift('dA',{t:5,s:.1,r:10}),mkDrift('dB',{t:7,s:.16,r:14}),mkDrift('dC',{t:11,s:.3,r:40})];
+function stepDrift(d,now){
+  if(now>d.next){
+    const A=d.amp; d.x.t=(Math.random()*2-1)*A.t; d.y.t=(Math.random()*2-1)*A.t*.8;
+    d.sx.t=1+(Math.random()*2-1)*A.s; d.sy.t=1+(Math.random()*2-1)*A.s; d.r.t=(Math.random()*2-1)*A.r;
+    d.next=now+2600+Math.random()*3200;
+  }
+  [d.x,d.y,d.sx,d.sy,d.r].forEach(step);
+  d.el.style.transform=`translate(${d.x.x.toFixed(2)}%,${d.y.x.toFixed(2)}%) rotate(${d.r.x.toFixed(2)}deg) scale(${d.sx.x.toFixed(3)},${d.sy.x.toFixed(3)})`;
+}
+const stage=$('astrid'), eL=$('eyeL'), eR=$('eyeR'), gL=$('gL'), gR=$('gR');
+let pointerAt=0;
+addEventListener('pointermove',ev=>{
+  const r=stage.getBoundingClientRect();
+  const dx=(ev.clientX-(r.left+r.width/2))/(r.width/2), dy=(ev.clientY-(r.top+r.height/2))/(r.height/2);
+  yaw.t=Math.max(-1,Math.min(1,dx))*.5; pitch.t=Math.max(-1,Math.min(1,dy))*.34; pointerAt=performance.now();
+});
+(function glance(){
+  if(performance.now()-pointerAt>2500){
+    const home=Math.random()<.45;
+    yaw.t=home?0:(Math.random()*2-1)*.36; pitch.t=home?0:(Math.random()*2-1)*.2;
+  }
+  setTimeout(glance,1800+Math.random()*2600);
+})();
+let blinkUntil=0; const blink=()=>{blinkUntil=performance.now()+110;};
+(function clock(){ setTimeout(()=>{ blink(); if(Math.random()<.18) setTimeout(blink,260); clock(); },2800+Math.random()*3400); })();
+stage.addEventListener('click',()=>{size.v+=.09; blink();});
+
+/* refraction: fringe is ~0 at the centre and grows toward the rim, pointing outward */
+function fringe(g,pts){
+  if(!pts.length) return;
+  let mx=0,my=0; pts.forEach(p=>{mx+=p.x;my+=p.y}); mx/=pts.length; my/=pts.length;
+  const dx=(mx-CX)/RR, dy=(my-CY)/RR, r=Math.min(1,Math.hypot(dx,dy));
+  const amt=.5+r*r*7, ux=r?dx/r:1, uy=r?dy/r:0;
+  // cyan bends inward, pink outward (plus a small constant sideways split)
+  g.children[1].setAttribute('transform',`translate(${(-ux*amt-.6).toFixed(2)} ${(-uy*amt+.2).toFixed(2)})`);
+  g.children[2].setAttribute('transform',`translate(${( ux*amt+.6).toFixed(2)} ${( uy*amt-.2).toFixed(2)})`);
+}
+let lastKey='';
+function frame(now){
+  lid.t = now<blinkUntil ? 0 : 1;
+  [yaw,pitch,size,lid].forEach(step);
+  hist.push({t:now,y:yaw.x,p:pitch.x});
+  while(hist.length>1 && hist[1].t<=now-LAG) hist.shift();
+  cYaw.t=hist[0].y; cPitch.t=hist[0].p;
+  step(cYaw); step(cPitch);
+  const key=[yaw.x,pitch.x,size.x,lid.x,cYaw.x,cPitch.x].map(v=>v.toFixed(3)).join();
+  drifts.forEach(d=>stepDrift(d,now));
+  if(key!==lastKey){
+    lastKey=key;
+    const xf=projector(yaw.x,pitch.x,0), l=Math.max(0,lid.x);
+    const L={lon:-REST.lon,lat:REST.lat,s:size.x,rot:0,lid:l}, R={lon:REST.lon,lat:REST.lat,s:size.x,rot:0,lid:l};
+    const pl=eyePts(L,xf), pr=eyePts(R,xf);
+    eL.setAttribute('d',toD(pl)); gL.setAttribute('opacity',lidFade(L)); fringe(gL,pl);
+    eR.setAttribute('d',toD(pr)); gR.setAttribute('opacity',lidFade(R)); fringe(gR,pr);
+    // head turn: inner gradients counter-shift against the gaze, foreshorten at the side
+    const sy=Math.sin(cYaw.x), spt=Math.sin(cPitch.x);
+    const tx=-sy*RR*.8/236*100, ty=-spt*Math.cos(cYaw.x)*RR*.8/236*100; // inverted: light shifts opposite the gaze
+    coreMove.style.transform=`translate(${tx.toFixed(2)}%,${ty.toFixed(2)}%) scale(${(1-.16*Math.abs(sy)).toFixed(3)},${(1-.16*Math.abs(spt)).toFixed(3)})`;
+  }
+  requestAnimationFrame(frame);
+}
+frame(performance.now());
+</script>
+</body>
+</html>
