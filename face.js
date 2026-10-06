@@ -226,7 +226,7 @@
        gx, gy = pupil gaze in −1…1 (+x right, +y down, from the pupil spring); k = {rim, pupil, follow, dil,
        stretch, sdx, sdy} (slider factors 1 = default); P = per-shape params (SHAPES fields, morph-lerped; omit = classic;
        with the SDF fields r, e, taper, tilt, bend, lk* the pupils are also kept inside the white, see containPupil). */
-  const TOON={rimOut:.15, rimUp:.24, rimGrow:.05, pa:.43, pb:.63, pin:.17, pdown:.14, fu:.5, fv:.45, dilMax:1.22, sAlong:.2, sAcross:.15};
+  const TOON={rimOut:.15, rimUp:.24, rimGrow:.05, pa:.43, pb:.63, pin:.17, pdown:.14, fu:.55, fv:.52, dilMax:1.22, sAlong:.2, sAcross:.15};
   const TOONP=Object.freeze({ro:TOON.rimOut, ru:TOON.rimUp, rg:TOON.rimGrow, rs:1, rpo:0, rpu:0, pa:TOON.pa, pb:TOON.pb, pin:TOON.pin, pdown:TOON.pdown});
   function toonV(o,box,open,gx,gy,k,P){
     P=P||TOONP;
@@ -259,6 +259,15 @@
       if(fit<1){ o.a*=fit; o.b*=fit; }
       containPupil(o,-1,o.pin+o.pu,pvb*ks,P,bw,bh); o.cuL=CP.u; o.cvL=CP.v;
       containPupil(o, 1,-o.pin+o.pu,pvb*ks,P,bw,bh); o.cuR=CP.u; o.cvR=CP.v;
+      // prefer squashing into the wall over sliding the centre up: keep ~35% of the upward push as a centre
+      // nudge and absorb the rest into a shorter pupil. Tip stays put (still clear), centre sits lower → the
+      // expressive "filled bottom" look of a glance-down, without leaving the white.
+      // shared upward push (both eyes: a glance down) → mostly shorten the pupil so the centre stays low;
+      // asymmetric push (one eye against a side) stays a centre nudge only, so the other eye isn't squashed
+      const upL=Math.max(0,o.cvL), upR=Math.max(0,o.cvR), up=Math.min(upL,upR), keep=.35;
+      if(up>1e-6){ const want=up*(1-keep), bMin=o.b*(1/Math.max(dil,1))*.88;
+        const bShrink=Math.min(want,Math.max(0,o.b-bMin)); o.b-=bShrink;
+        o.cvL-=bShrink; o.cvR-=bShrink; }
     }
     return o;
   }
@@ -273,9 +282,12 @@
   for(let i=0;i<NCP;i++){ CPC[i]=Math.cos(2*Math.PI*i/NCP); CPS[i]=Math.sin(2*Math.PI*i/NCP);
     const t=clamp((CPS[i]-.15)/.45,0,1); CPW[i]=-t*t*(3-2*t); }
   const CP={u:.5,v:.5,res:.5}; CP.u=CP.v=CP.res=0;
-  const CPK={margin:.06, tau:.012, hinge:.03};             // × the white's current hh
+  const CPK={margin:0, clear:.02, tau:.01, hinge:.012};     // × the white's current hh: engage only when leaving
+  /* soft containment: push only kicks in once a lower/side sample is outside (margin 0). The push target is
+     −clear inside, so resting pupils that already sit inside don't move; a downward glance can drop until the
+     tip kisses the warped bottom (~clear away). */
   function containPupil(o,side,cu,cv,P,hw0,hh0){
-    const m=CPK.margin*hh0, tau=CPK.tau*hh0, kh=CPK.hinge*hh0;
+    const m=CPK.margin*hh0, clr=CPK.clear*hh0, tau=CPK.tau*hh0, kh=CPK.hinge*hh0;
     const det=o.m0*o.m3-o.m1*o.m1, i0=o.m3/det, i1=-o.m1/det, i3=o.m0/det;
     const ihw2=1/(hw0*hw0), ihh2=1/(hh0*hh0);
     let du=0, dv=0, s=0, pen=0;
@@ -290,7 +302,9 @@
         const w=Math.exp((CPD[i]-mx)/tau), gu=CPU[i]*ihw2, gv=CPV[i]*ihh2, gl=Math.sqrt(gu*gu+gv*gv)||1;
         se+=w; nu+=w*gu/gl; nv+=w*gv/gl;
       }
-      pen=mx+tau*Math.log(se)+m; s=pen<=-kh?0:pen<kh?(pen+kh)*(pen+kh)/(4*kh):pen;
+      // engage only when the soft-max SDF is outside (pen0>0); then push toward −clear
+      const pen0=mx+tau*Math.log(se)+m; pen=pen0+clr;
+      s=pen0<=0?0:pen<=-kh?0:pen<kh?(pen+kh)*(pen+kh)/(4*kh):pen;
       if(s<=0||it===4) break;                                  // the 5th pass only measures the residual
       const nl=Math.sqrt(nu*nu+nv*nv)||1; du-=s*nu/nl; dv-=s*nv/nl;
     }
