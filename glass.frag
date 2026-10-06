@@ -49,6 +49,10 @@ uniform vec4  uPupil;   // pupil centre (rad, eye-local): inward rest, gaze u, v
 uniform mat2  uPupilM;  // pupil dart stretch: eye-local → pupil frame (identity at rest)
 uniform vec4  uPupilA;  // pupil semi-axes a, b and 1/a, 1/b (rad)
 uniform vec4  uPupilC;  // per-eye pupil centre offsets from the soft containment (face.js containPupil): L xy, R zw
+uniform vec4  uMotif;   // x = type (0 oval/dot ellipse, 1 star, 2 heart, 3 spiral, 4 ring, 5 flower, 6 tiny-dot), y = unused, z = brow on, w = blush
+uniform vec3  uMotifCol;// motif / pupil fill colour (toon ink used for outline/rim still)
+uniform vec4  uBrow;    // brow: lift×hh, halfW×hw, thick×hw, angle (rad, + = outer end higher)
+uniform vec3  uBrowCol; // brow colour
 uniform vec3  uToonCol; // toon ink: the coat's dark/mark tone
 uniform vec4  uShadow;  // eye drop shadow: strength, lat offset down (rad), gauss k (exp2), -
 uniform vec4  uShapeC;  // eye lid (radians): egg-centre offset, lid line (rel. to centre), corner k, -
@@ -122,7 +126,59 @@ float eyeSDF(vec2 p, vec2 b, float side, vec3 rp){
 // seam against the rim behind, no light line) and the pupil itself never gets an RGB split. gFillMax = the union
 // of the three taps' white fills: the pupil is laid over all three channels there too, so where it nears the
 // white's edge (e.g. foreshortened at the limb) the edge's colour split never shows on it.
-float gCovP, gFillMax;
+float gCovP, gFillMax; vec3 gPupilCol;
+// ---- emote motifs (Polly batch): pupil glyphs + brows ----
+float sdStarIQ(vec2 p){
+  // 5-point star, outer radius 1, inner ~0.4 (Inigo Quilez sdStar)
+  float an = 3.14159265 / 5.0;
+  vec2 acs = vec2(cos(an), sin(an));
+  vec2 ecs = vec2(0.401, 0.916);         // ≈ (rf·cos(en), sin(en)) with rf=.38, en=π/5
+  float bn = mod(atan(p.x, p.y), 2.0 * an) - an;
+  p = length(p) * vec2(cos(bn), abs(sin(bn)));
+  p -= acs;
+  p += ecs * clamp(-dot(p, ecs), 0.0, acs.y / ecs.y);
+  return length(p) * sign(p.x);
+}
+// Simpler heart: union of two circles + diamond (stable)
+float sdHeart(vec2 p){
+  // Inigo Quilez — https://iquilezles.org/articles/distfunctions2d/
+  p.x = abs(p.x);
+  if (p.y + p.x > 1.0)
+    return length(p - vec2(0.25, 0.75)) - sqrt(2.0) * 0.25;
+  return sqrt(min(dot(p - vec2(0.00, 1.00), p - vec2(0.00, 1.00)),
+                  dot(p - 0.5 * max(p.x + 0.0, 0.0) * vec2(1.0, -1.0),
+                      p - 0.5 * max(p.x + 0.0, 0.0) * vec2(1.0, -1.0)))) * sign(p.x - p.y);
+}
+float sdFlower(vec2 p){
+  float a = atan(p.y, p.x), r = length(p);
+  return r - (0.50 + 0.32 * cos(6.0 * a));
+}
+float sdSpiral(vec2 p){
+  float a = atan(p.y, p.x), r = length(p);
+  float k = 1.35;
+  float arm = abs(fract((r * k - a / 6.2831853) * 0.5 + 0.5) - 0.5) * 2.0 / k;
+  return arm - 0.10;
+}
+float sdRing(vec2 p){ return abs(length(p) - 0.70) - 0.16; }
+float motifSDF(vec2 pq, float typ){
+  if (typ < 1.5) return sdStarIQ(pq);
+  if (typ < 2.5) return sdHeart(pq * 0.85 + vec2(0.0, 0.35));
+  if (typ < 3.5) return sdSpiral(pq);
+  if (typ < 4.5) return sdRing(pq);
+  if (typ < 5.5) return sdFlower(pq);
+  return length(pq) - 1.0;
+}
+float sdBrow(vec2 p, float side, vec2 b){
+  float lift = uBrow.x * b.y, hw = uBrow.y * b.x, th = max(uBrow.z * b.x, 1e-4), ang = uBrow.w;
+  float ca = cos(ang), sa = sin(ang);
+  vec2 mid = vec2(0.0, lift);
+  vec2 dir = vec2(side * ca, sa);
+  vec2 a1 = mid - dir * hw, a2 = mid + dir * hw;
+  vec2 pa = p - a1, ba = a2 - a1;
+  float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-6), 0.0, 1.0);
+  return length(pa - ba * h) - th;
+}
+
 // eye shading for one chroma tap, given its sphere coordinates (lon, lat) and visible-hemisphere Z
 vec3 eyeTap(vec3 col, float lon, float lat, float Z, float rimA, float pc){
   float side = lon < 0.0 ? -1.0 : 1.0;
@@ -144,19 +200,29 @@ vec3 eyeTap(vec3 col, float lon, float lat, float Z, float rimA, float pc){
   vec3 ec  = t < 0.5 ? mix(uEyeHi, uEye, t * 2.0) : mix(uEye, uEyeLo, 0.55 * smoothstep(0.55, 1.0, t));
   float rimShade = smoothstep(uEyeK2.y, 0.0, ds) * smoothstep(0.3, 0.9, t);
   ec = mix(ec, uEyeLo, 0.4 * rimShade);
-  // toon pupil (face.js sdPupil): upright dark oval inside the white (soft containment keeps it clear of the
-  // edge; lids/squint/blink cover it). Evaluated on the centre tap only (pc = 1), reused by the side taps.
+  // toon pupil / emote motif: upright oval (type 0) or glyph (star/heart/spiral/ring/flower/dot). Soft
+  // containment keeps it inside the white; lids cover it. Centre tap evaluates, side taps reuse coverage.
+  // Motif fill uses uMotifCol; classic toon (type 0, default ink) keeps uToonCol so classic shapes match.
 #ifdef TOON
   if (uToon.y > 0.0 && pc > 0.5) {
-    float psx = 1.0 + side * uAsym.x;                           // pupils follow the 3/4 asymmetry
-    vec2 pc2 = side < 0.0 ? uPupilC.xy : uPupilC.zw;            // soft containment (stays inside the white)
-    vec2 pq = uPupilM * vec2(u / psx + side * uPupil.x - uPupil.y - pc2.x, v + side * uAsym.y - uPupil.z - pc2.y);   // dart stretch
-    vec2 p0 = pq * uPupilA.zw, p1 = p0 * uPupilA.zw;
-    float pk = length(p0);
-    float dp = pk * (pk - 1.0) * inversesqrt(max(dot(p1, p1), 1e-8)) * min(psx, 1.0) * uPupil.w * RR * (0.5 * Z + 0.5);
+    float psx = 1.0 + side * uAsym.x;
+    vec2 pc2 = side < 0.0 ? uPupilC.xy : uPupilC.zw;
+    vec2 pq = uPupilM * vec2(u / psx + side * uPupil.x - uPupil.y - pc2.x, v + side * uAsym.y - uPupil.z - pc2.y);
+    float typ = uMotif.x;
+    float dp;
+    if (typ < 0.5 || typ > 5.5) {
+      // ellipse (0) or tiny-dot (6): same gradient-normalised ellipse as before; type 6 just uses smaller axes from CPU
+      vec2 p0 = pq * uPupilA.zw, p1 = p0 * uPupilA.zw;
+      float pk = length(p0);
+      dp = pk * (pk - 1.0) * inversesqrt(max(dot(p1, p1), 1e-8));
+    } else {
+      dp = motifSDF(pq * uPupilA.zw, typ);
+    }
+    dp *= min(psx, 1.0) * uPupil.w * RR * (0.5 * Z + 0.5);
     gCovP = uToon.y * (1.0 - smoothstep(-w, w, dp));
+    gPupilCol = (typ > 0.5) ? uMotifCol : uToonCol;
   }
-  ec = mix(ec, uToonCol, gCovP);
+  ec = mix(ec, gPupilCol, gCovP);
 #endif
   float fill = 1.0 - smoothstep(-w, w, ds);
 #ifdef TOON
@@ -222,11 +288,30 @@ vec3 eyes(vec3 col, vec2 p, vec2 off){
   // toon variant (compiled only while the toon layer is on: '#define TOON' is prepended by index.html)
   float rimA = 0.0;                                            // ≥ 0 on the centre tap, ≤ 0 on the side taps
   if (uToon.x > 0.0) { rimA = eyeRim(lon, lat, Z); col = mix(col, uToonCol, rimA); }
-  gCovP = 0.0; gFillMax = 0.0;
+  // emote brows (thick coloured capsules above each eye) + soft blush under the eyes
+  if (uMotif.z > 0.0) {
+    float side = lon < 0.0 ? -1.0 : 1.0;
+    float u = lon - uShapeT.w * side;
+    float v = lat - uEyeK2.z + uEyeK2.w * u * u;
+    float db = sdBrow(vec2(u, v), side, uEyeA.xy) * RR * (0.5 * Z + 0.5);
+    float bv = uEyeP.z * smoothstep(0.02, 0.08, Z) * (1.0 - smoothstep(-uEyeK.x, uEyeK.x, db));
+    col = mix(col, uBrowCol, bv * uMotif.z);
+  }
+  if (uMotif.w > 0.0) {
+    // blush: soft ellipses just below/outside each eye
+    float side = lon < 0.0 ? -1.0 : 1.0;
+    float u = lon - uShapeT.w * side + side * uEyeA.x * .55;
+    float v = lat - uEyeK2.z - uEyeA.y * .85;
+    vec2 be = vec2(u / (uEyeA.x * .7), v / (uEyeA.y * .35));
+    float bd = (length(be) - 1.0) * RR * .5;
+    float bv = uEyeP.z * smoothstep(0.02, 0.08, Z) * exp(-bd*bd*2.5) * .55;
+    col = mix(col, vec3(.95,.35,.55), bv * uMotif.w);
+  }
+  gCovP = 0.0; gFillMax = 0.0; gPupilCol = uToonCol;
   float cg = eyeTap(col, lon, lat, Z, rimA, 1.0).g;            // centre tap (also the pupil)
   vec3 c = vec3(eyeTap(col, lon + dl.x, lat + dl.y, Z + dl.z, -rimA, 0.0).r, cg,
                 eyeTap(col, lon - dl.x, lat - dl.y, Z - dl.z, -rimA, 0.0).b);   // side taps skip the pupil
-  return mix(c, uToonCol, gCovP * gFillMax);
+  return mix(c, gPupilCol, gCovP * gFillMax);
 #else
   return vec3(eyeTap(col, lon + dl.x, lat + dl.y, Z + dl.z, 0.0, 0.0).r,
               eyeTap(col, lon, lat, Z, 0.0, 0.0).g,
