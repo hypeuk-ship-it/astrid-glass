@@ -19,6 +19,13 @@
   .coats{position:fixed;left:0;right:0;bottom:22px;display:flex;justify-content:center;gap:10px;align-items:center}
   .coats button{width:22px;height:22px;border-radius:50%;border:1px solid rgba(0,0,0,.15);cursor:pointer;padding:0;outline-offset:3px}
   .coats button[data-c][aria-pressed=true]{outline:1.5px solid var(--ink)}
+  .eyes{position:fixed;left:0;right:0;bottom:54px;display:flex;justify-content:center;gap:6px}
+  .eyes button{width:30px;height:22px;border-radius:11px;border:1px solid transparent;background:transparent;color:var(--ink);cursor:pointer;padding:0;opacity:.62;outline-offset:2px}
+  .eyes button svg{width:20px;height:14px;display:block;margin:auto}
+  .eyes button[aria-pressed=true]{border-color:currentColor;opacity:.9}
+  .eyes button:hover{opacity:.9}
+  #dbg select{grid-column:1 / 3;font:inherit;color:#e8ecf4;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.18);border-radius:6px;padding:3px 4px}
+  #dbg select option{color:#111}
   .coats .mode,.coats .snd{width:auto;height:22px;border-radius:11px;padding:0 10px;background:transparent;color:var(--ink);font:inherit;border-color:currentColor;opacity:.7}
   /* debug panel (?debug or press d) */
   #dbg{position:fixed;top:12px;right:12px;width:236px;padding:10px 12px 12px;border-radius:12px;background:rgba(18,20,28,.82);color:#e8ecf4;
@@ -37,6 +44,7 @@
 <body>
 <canvas id="gl" aria-hidden="true"></canvas>
 <div class="stage" id="astrid" role="button" tabindex="0" aria-label="Astrid. Tap to poke."></div>
+<div class="eyes" id="eyes" role="group" aria-label="Eye shape"></div>
 <div class="coats" id="coats"></div>
 <div id="dbg"></div>
 
@@ -47,7 +55,8 @@
 // Look (matches Henlo's reference): a white frosted form that bleeds into the paper with a Gaussian edge
 // (no outline, no glint), a pale luminous blue pool glowing up from the BOTTOM and fading to white haze
 // at the top, a faint pink/cyan prism smear only along the soft lower boundary, and big bright white
-// stadium "pebble" eyes with a slight RGB split and a faint inner shade.
+// "pebble" eyes (stadium by default; egg, dot, oval, bean, squircle by uniform) with a slight RGB split
+// and a faint inner shade.
 // Layering (bottom → top):
 //   frost(p)  : paper · white bloom into the page · frosted body (Gaussian edge)      [fixed]
 //   pool(p)   : drifting blob field (pool, deep floor, bloom) moved by the delayed, inverted head turn,
@@ -78,10 +87,13 @@ uniform vec3  uBloomCol, uLiftCol, uTouchCol;  // per coat: mix(mid,edge,.35) ·
 uniform vec4  uAura;    // rgb: mix(core,mid,.3), a: 0.42·(1 − 0.4·dark)
 uniform vec2  uMode;    // x: unused, y: dark (0/1)
 uniform vec4  uRot;     // eyes: cos yaw, sin yaw, cos pitch, sin pitch
-uniform vec4  uEyeP;    // eyes: stadium half-width (rad), cap half-length (rad), lidFade, capsule radius (units)
+uniform vec4  uEyeP;    // eyes: -, -, lidFade (morph-blended), capsule radius (units)
+uniform vec4  uEyeA;    // eye box (radians): half width, half visible height (morph-blended), 1/hw, 1/hh
+uniform vec4  uShape;   // eye shape params: corner radius ×hw, ellipse weight, egg taper, -
+uniform vec4  uShapeT;  // eye shape params: cos lean, sin lean, bean bow ×hw, -
 uniform vec4  uEyeL, uEyeR; // eyes: tight bounding capsules = projected stadium axis ends (a.xy, b.xy), screen units
 uniform vec4  uEyeK;    // eyes: soft edge w, glow k, aura k (exp2 factors), 1/hw
-uniform vec4  uEyeK2;   // eyes: 1/(2(cap+hw)), rim-shade edge (−0.7·hw·RR), lat centre (0.04+lift), arc/hw
+uniform vec4  uEyeK2;   // eyes: 1/(2·hh), rim-shade edge (−0.7·hw·RR), lat centre (0.04+lift), arc/hw (morph-blended box)
 uniform vec4  uFace;    // cos roll, sin roll, -, -
 uniform vec4  uQ;       // head-turn map (inverted gaze + foreshorten): q = pl·xy + zw
 uniform mat2  uBA, uBB, uBC; // blobs (floor, pool, bloom): drift⁻¹ with 1/radii folded in
@@ -108,13 +120,31 @@ vec3 tint(vec3 col, vec3 c, float a){
   return mix(mix(col, c, a), 1.0 - (1.0 - col) * (1.0 - c * a * 0.8), uMode.y);
 }
 
+// ---- eye shapes: ONE parametric SDF in eye-local sphere coords (radians; < 0 inside), box b = (half w,
+// half h). Every shape is a parameter set (face.js SHAPES / eyeSDFP): stadium = rounded box with r = hw,
+// squircle r = .55hw, dot = round box, oval = ellipse, egg = tapered ellipse, bean = leaning bowed ellipse.
+// A shape switch lerps the params on the CPU → no branches, one evaluation per tap, even mid-morph.
+float eyeSDF(vec2 p, vec2 b, float side){
+  vec2 ib = uEyeA.zw;                                                     // 1/b (CPU)
+  vec2 q = vec2(uShapeT.x * p.x + side * uShapeT.y * p.y, -side * uShapeT.y * p.x + uShapeT.x * p.y);  // lean
+  float yn = clamp(q.y * ib.y, -1.0, 1.0);
+  q.x -= side * uShapeT.z * b.x * (1.0 - yn * yn);                       // bow
+  float g = 1.0 - uShape.z * yn; q.x /= g;                                // taper (egg)
+  float r = uShape.x * b.x; vec2 k = abs(q) - b + r;
+  float dR = length(max(k, 0.0)) + min(max(k.x, k.y), 0.0) - r;           // rounded box
+  vec2 e0 = q * ib, e1 = e0 * ib;                                         // ellipse (gradient-normalised
+  float k0 = length(e0);                                                  //  approx, exact on the edge)
+  float dE = k0 * (k0 - 1.0) * inversesqrt(max(dot(e1, e1), 1e-8));
+  return mix(dR, dE, uShape.y) * g;
+}
+
 // eye shading for one chroma tap, given its sphere coordinates (lon, lat) and visible-hemisphere Z
 vec3 eyeTap(vec3 col, float lon, float lat, float Z){
-  float hw = uEyeP.x, cap = uEyeP.y;
-  float u = lon - (lon < 0.0 ? -0.2 : 0.2);
-  // happy: eyes lift a touch and bow into a soft ∩ (edges droop) — same stadium, never flatter
+  float side = lon < 0.0 ? -1.0 : 1.0;
+  float u = lon - 0.2 * side;
+  // happy: eyes lift a touch and bow into a soft ∩ (edges droop) — any shape, never flatter than round
   float v = lat - uEyeK2.z + uEyeK2.w * u * u;
-  float d  = length(vec2(u, v - clamp(v, -cap, cap))) - hw;   // radians
+  float d = eyeSDF(vec2(u, v), uEyeA.xy, side);                            // radians
   float ds = d * RR * (0.5 * Z + 0.5);                        // ≈ screen units (foreshortened)
   float w  = uEyeK.x;
   float vis = uEyeP.z * smoothstep(0.02, 0.08, Z);            // lidFade · z>0.02 cull
@@ -328,7 +358,7 @@ const toFallback=why=>{console.warn('Astrid: '+why+', using the SVG fallback'); 
 const gl=cv.getContext('webgl',GL_OPTS)||cv.getContext('experimental-webgl',GL_OPTS);
 if(!gl){ toFallback('WebGL unavailable'); return; }
 const UNIFORMS=['uVS','uBodyM','uNT','uWarp','uPaper','uCore','uDeep','uMid','uEdge','uHalo','uEye','uEyeHi','uEyeLo','uGlow','uBloomCol','uLiftCol','uTouchCol','uAura','uMode',
-  'uRot','uEyeP','uEyeL','uEyeR','uEyeK','uEyeK2','uFace','uQ','uBA','uBB','uBC','uCA','uCB','uCC','uFrost','uPoolK','uFringeK','uMisc','uTouch'];
+  'uRot','uEyeP','uEyeA','uShape','uShapeT','uEyeL','uEyeR','uEyeK','uEyeK2','uFace','uQ','uBA','uBB','uBC','uCA','uCB','uCC','uFrost','uPoolK','uFringeK','uMisc','uTouch'];
 let U={}, lost=false; const GN=24, GCOUNT=GN*GN*6;
 const draw=()=>gl.drawElements(gl.TRIANGLES,GCOUNT,gl.UNSIGNED_SHORT,0);
 function initGL(){              // (re)build everything GPU-side; also used after a context restore
@@ -582,6 +612,49 @@ stage.addEventListener('lostpointercapture',petEnd);
 stage.addEventListener('click',()=>{ if(suppressClick){suppressClick=false;return;} tap(); });   // AT / synthetic clicks
 stage.addEventListener('contextmenu',e=>{ if(pet.down) e.preventDefault(); });
 
+/* ================= eye shapes (face.js SHAPES; stadium = default) =================
+   Switching crossfades the two SDFs with a quick spring (~0.25 s). Remembered; ?eyes= is a test hook. */
+const SHAPE_NAMES=F.SHAPES.map(s=>s.name), EYES_KEY='astridEyes';
+const qEyes=Q.get('eyes');
+let eyesName=store.get(EYES_KEY); if(!SHAPE_NAMES.includes(eyesName)) eyesName='stadium';
+if(qEyes&&SHAPE_NAMES.includes(qEyes)) eyesName=qEyes;
+const SH={a:SHAPE_NAMES.indexOf(eyesName),b:SHAPE_NAMES.indexOf(eyesName)};
+const shapeT=spring(0,.2,.55); ALL.push(shapeT);
+function setEyes(name,persist){
+  const i=SHAPE_NAMES.indexOf(name); if(i<0) return;
+  eyesName=name; if(persist!==false) store.set(EYES_KEY,name);
+  if(i===SH.b&&shapeT.t===1) {} else if(i===SH.a){                 // back to where it came from: reverse smoothly
+    if(SH.b!==SH.a){ SH.a=SH.b; SH.b=i; shapeT.x=1-shapeT.x; shapeT.px=1-shapeT.px; shapeT.v=-shapeT.v; shapeT.t=1; }
+  } else {
+    if(shapeT.x>.5){ SH.a=SH.b; shapeT.x=1-shapeT.x; shapeT.px=1-shapeT.px; shapeT.v=-shapeT.v; }   // keep the dominant shape
+    SH.b=i; shapeT.t=1;
+  }
+  if(SH.a===SH.b){ snap(shapeT,0); }
+  document.querySelectorAll('.eyes button').forEach(b=>b.setAttribute('aria-pressed',b.dataset.e===name));
+  const sel=document.getElementById('dEyes'); if(sel) sel.value=name;
+}
+/* eye-shape buttons: tiny two-eye icons (left eye, right eye), same order as F.SHAPES */
+const EYE_ICONS={
+  stadium:'<rect x="3.6" y="2" width="4" height="10" rx="2"/><rect x="12.4" y="2" width="4" height="10" rx="2"/>',
+  egg:'<path d="M5.6 2.2c-1.6 0-2.8 3-2.8 5.6 0 2.3 1.3 3.9 2.8 3.9s2.8-1.6 2.8-3.9c0-2.6-1.2-5.6-2.8-5.6z"/><path d="M14.4 2.2c-1.6 0-2.8 3-2.8 5.6 0 2.3 1.3 3.9 2.8 3.9s2.8-1.6 2.8-3.9c0-2.6-1.2-5.6-2.8-5.6z"/>',
+  dot:'<circle cx="5.6" cy="7" r="2.9"/><circle cx="14.4" cy="7" r="2.9"/>',
+  oval:'<ellipse cx="5.6" cy="7" rx="2.5" ry="4.6"/><ellipse cx="14.4" cy="7" rx="2.5" ry="4.6"/>',
+  bean:'<ellipse cx="5.4" cy="7" rx="2.4" ry="4.4" transform="rotate(14 5.4 7)"/><ellipse cx="14.6" cy="7" rx="2.4" ry="4.4" transform="rotate(-14 14.6 7)"/>',
+  squircle:'<rect x="2.8" y="4" width="5.6" height="6" rx="2"/><rect x="11.6" y="4" width="5.6" height="6" rx="2"/>'};
+const eyeBar=$('eyes');
+SHAPE_NAMES.forEach(n=>{
+  const b=document.createElement('button'); b.type='button'; b.dataset.e=n;
+  b.title=n[0].toUpperCase()+n.slice(1)+' eyes'; b.setAttribute('aria-label',b.title); b.setAttribute('aria-pressed',n===eyesName);
+  b.innerHTML='<svg viewBox="0 0 20 14" fill="currentColor" aria-hidden="true">'+EYE_ICONS[n]+'</svg>';
+  b.onclick=e=>{e.stopPropagation();setEyes(n);}; eyeBar.appendChild(b);
+});
+eyeBar.addEventListener('pointerdown',e=>e.stopPropagation());
+
+function shapeTick(){
+  step(shapeT);
+  if(shapeT.t===1&&shapeT.x>.995&&Math.abs(shapeT.v)<.004){ SH.a=SH.b; snap(shapeT,0); }   // morph done → only A runs
+}
+
 /* ================= breathing (glass only: pool, deep floor, bloom — never the eyes, lids or pose) =================
    Not a wave: a breath cycle of eased segments (inhale → exhale → short pause at the bottom), every breath
    with its own random period (3.5–5.5 s) and depth (0.6–1.0); the inhale takes ~42% of the active time, so it
@@ -691,6 +764,7 @@ function tick(){            // one fixed 60 Hz step of the whole motion model
   }
   petTick(dt);
   breathTick();
+  shapeTick();
   // happy eyes: lid comes down with content → the stadium shortens toward (never past) a circle
   lid.t=CK.simT<blinkUntil?0:1-.5*Math.max(0,Math.min(1,happy.x));
   step(yaw);step(pitch);step(size);step(lid);
@@ -715,11 +789,11 @@ function tick(){            // one fixed 60 Hz step of the whole motion model
     if(CK.noiseT>=NT_WRAP){CK.noiseT-=NT_WRAP; CK.prevNT-=NT_WRAP;}   // seamless (periodic noise)
   }
 }
-const EYE={hw:.5,cap:.5,fade:.5}, PA={x:.5,y:.5,z:.5}, PB={x:.5,y:.5,z:.5}, PJ=new Float64Array(8), EV=new Float64Array(2);
+const EYE={hw:.5,hh:.5,cap:.5,fade:.5,ex:.5}, EYEB={hw:.5,hh:.5,cap:.5,fade:.5,ex:.5}, EV3=new Float64Array(3), PA={x:.5,y:.5,z:.5}, PB={x:.5,y:.5,z:.5}, PJ=new Float64Array(8), EV=new Float64Array(2);
 /* uniform staging: preallocated Float32Arrays + uniform*fv. Passing doubles straight to gl.uniform4f boxes
    each argument (a heap number per value per frame); writing into typed arrays doesn't allocate at all. */
 const F32=n=>new Float32Array(n);
-const vRot=F32(4), vFace=F32(4), vEyeP=F32(4), vEyeL=F32(4), vEyeR=F32(4), vEyeK=F32(4), vEyeK2=F32(4), vQ=F32(4),
+const vEyeA=F32(4), vShape=F32(4), vShapeT=F32(4), vRot=F32(4), vFace=F32(4), vEyeP=F32(4), vEyeL=F32(4), vEyeR=F32(4), vEyeK=F32(4), vEyeK2=F32(4), vQ=F32(4),
       vFrost=F32(4), vPoolK=F32(4), vFringeK=F32(4), vMisc=F32(4), vTouch=F32(4), vNT=F32(1), vWarp=F32(1), mBody=F32(4),
       mBlob=[F32(4),F32(4),F32(4)], vBlobC=[F32(2),F32(2),F32(2)];
 const LOG2E=Math.LOG2E, gk=w=>-LOG2E/(w*w);                 // gauss(x,w)=exp2(x²·gk(w))
@@ -738,20 +812,31 @@ function pushUniforms(){
   vFace[0]=cr; vFace[1]=sr; gl.uniform4fv(U.uFace,vFace);
   // eyes: stadium (stadiumOf keeps it ≥ a circle) + happy lift/arc + every slider-derived constant
   const hp=Math.max(0,Math.min(1,at(happy,a))), lift=.035*hp, arc=.15*hp;
-  EV[0]=at(size,a)*T.eyeScale; EV[1]=at(lid,a); F.eyeV(EYE,EV);
-  const w=.8*T.eyeSoft+.4, ihw=1/Math.max(EYE.hw,1e-4);
+  // shape A (current) and, while morphing, shape B — same size/lid springs drive both boxes
+  const mt=Math.max(0,Math.min(1,at(shapeT,a)));
+  EV3[0]=at(size,a)*T.eyeScale; EV3[1]=at(lid,a); EV3[2]=SH.a; F.eyeShapeV(EYE,EV3);
+  if(mt>0){ EV3[2]=SH.b; F.eyeShapeV(EYEB,EV3); } else { EYEB.hw=EYE.hw; EYEB.hh=EYE.hh; EYEB.fade=EYE.fade; EYEB.ex=EYE.ex; }
+  const ehw=EYE.hw+(EYEB.hw-EYE.hw)*mt, ehh=EYE.hh+(EYEB.hh-EYE.hh)*mt, efade=EYE.fade+(EYEB.fade-EYE.fade)*mt;
+  // morph = lerp of the box and of the unified-SDF params (one SDF per tap in the shader)
+  const SA=F.SHAPES[SH.a], SB=F.SHAPES[SH.b], tl=SA.tilt+(SB.tilt-SA.tilt)*mt;
+  vEyeA[0]=Math.max(ehw,.004); vEyeA[1]=Math.max(ehh,.004); vEyeA[2]=1/vEyeA[0]; vEyeA[3]=1/vEyeA[1]; gl.uniform4fv(U.uEyeA,vEyeA);
+  vShape[0]=SA.r+(SB.r-SA.r)*mt; vShape[1]=SA.e+(SB.e-SA.e)*mt; vShape[2]=SA.taper+(SB.taper-SA.taper)*mt; gl.uniform4fv(U.uShape,vShape);
+  vShapeT[0]=Math.cos(tl); vShapeT[1]=Math.sin(tl); vShapeT[2]=SA.bend+(SB.bend-SA.bend)*mt; gl.uniform4fv(U.uShapeT,vShapeT);
+  const w=.8*T.eyeSoft+.4, ihw=1/Math.max(ehw,1e-4);
   /* tight bounding capsule per eye: the projected stadium axis (cap ends) + radius. Projection never
      enlarges distances (screen ≤ RR·angle), the meridian's bow is < 1u, the happy arc droops ≤ arc·hw,
      and the margin is where glow + aura fall under ~0.5/255 (ds ≥ 0.8·screen distance near the limb). */
   const lat0=F.REST.lat+lift, mg=(1.5+2.4*(3.5+2.5*w))/.8;
-  vEyeP[0]=EYE.hw; vEyeP[1]=EYE.cap; vEyeP[2]=EYE.fade; vEyeP[3]=(EYE.hw+arc*EYE.hw)*RR+1+mg; gl.uniform4fv(U.uEyeP,vEyeP);
+  // capsule for any shape (and both during a morph): radius = widest half-width × the shape's ex
+  const crad=Math.max(EYE.hw*EYE.ex,EYEB.hw*EYEB.ex), ccap=Math.max(0,Math.max(EYE.hh,EYEB.hh)-crad);
+  vEyeP[2]=efade; vEyeP[3]=(crad+arc*crad)*RR+1+mg; gl.uniform4fv(U.uEyeP,vEyeP);
   PJ[0]=cy; PJ[1]=sy; PJ[2]=cp; PJ[3]=sp; PJ[4]=cr; PJ[5]=sr;
   for(let s2=-1;s2<=1;s2+=2){
-    PJ[6]=s2*F.REST.lon; PJ[7]=lat0+EYE.cap; F.projectV(PA,PJ); PJ[7]=lat0-EYE.cap; F.projectV(PB,PJ);
+    PJ[6]=s2*F.REST.lon; PJ[7]=lat0+ccap; F.projectV(PA,PJ); PJ[7]=lat0-ccap; F.projectV(PB,PJ);
     const v=s2<0?vEyeL:vEyeR; v[0]=PA.x; v[1]=PA.y; v[2]=PB.x; v[3]=PB.y; gl.uniform4fv(s2<0?U.uEyeL:U.uEyeR,v);
   }
   vEyeK[0]=w; vEyeK[1]=gk(4+3*w); vEyeK[2]=gk(3.5+2.5*w); vEyeK[3]=ihw; gl.uniform4fv(U.uEyeK,vEyeK);
-  vEyeK2[0]=1/(2*(EYE.cap+EYE.hw)+1e-4); vEyeK2[1]=-EYE.hw*RR*.7; vEyeK2[2]=.04+lift; vEyeK2[3]=arc*ihw; gl.uniform4fv(U.uEyeK2,vEyeK2);
+  vEyeK2[0]=1/(2*ehh+1e-4); vEyeK2[1]=-ehw*RR*.7; vEyeK2[2]=.04+lift; vEyeK2[3]=arc*ihw; gl.uniform4fv(U.uEyeK2,vEyeK2);
   // head turn: INVERTED to the gaze, foreshortened at the side, plus the petting drag → q = pl·xy + zw
   const gsy=Math.sin(gy), gsp=Math.sin(gp), k=RR*T.follow;
   const ox=-gsy*k+at(dragX,a), oy=-gsp*Math.cos(gy)*k+at(dragY,a), isx=1/(1-.16*Math.abs(gsy)), isy=1/(1-.16*Math.abs(gsp));
@@ -828,6 +913,9 @@ cv.addEventListener('webglcontextrestored',()=>{
 const dbg=$('dbg'); let fpsEl=null;
 function buildDebug(){
   dbg.innerHTML='<h4>ASTRID · VIBE <b id="fps">– fps</b></h4>';
+  const el=document.createElement('label'); el.innerHTML='<span>eye shape</span><span></span><select id="dEyes"></select>';
+  const sel=el.querySelector('select'); SHAPE_NAMES.forEach(n=>{const o=document.createElement('option');o.value=o.textContent=n;sel.appendChild(o);});
+  sel.value=eyesName; sel.onchange=()=>setEyes(sel.value); dbg.appendChild(el);
   SLIDERS.forEach(([key,label,min,max,st])=>{
     const l=document.createElement('label');
     l.innerHTML=`<span>${label}</span><span></span><input type="range" min="${min}" max="${max}" step="${st}">`;
@@ -842,7 +930,7 @@ function buildDebug(){
   dbg.appendChild(row);
   $('dReset').onclick=()=>{T=Object.assign({},TUNE_DEF);store.del(TUNE_KEY);buildDebug();needResize=true;};
   $('dCopy').onclick=()=>{
-    const txt=JSON.stringify(T,null,2), btn=$('dCopy');
+    const txt=JSON.stringify(Object.assign({eyes:eyesName},T),null,2), btn=$('dCopy');
     const ok=()=>{btn.textContent='Copied ✓';setTimeout(()=>btn.textContent='Copy values',1200);};
     const legacy=()=>{
       const ta=document.createElement('textarea');ta.value=txt;ta.setAttribute('readonly','');ta.style.cssText='position:fixed;opacity:0';
@@ -888,7 +976,7 @@ function drive(steps){
 }
 /* test hook: trace(steps) runs the same scripted sim without drawing → per tick [breath, content, size, lid, yaw, pitch] */
 const trace=steps=>{stop(); const r=[]; driveSteps(steps,r); return JSON.stringify(r);};
-window.__astrid={drive,trace,pet:()=>({down:pet.down,content:pet.content,happy:happy.x,lid:lid.x,roll:roll.x,press:press.x,body:bodyA.x,breath:breath.x,revs:pet.revs.length,lastTickle:pet.lastTickle,simT:CK.simT,voice:Voice.stats()}),bench,get T(){return T},state:()=>state,pose:()=>({yaw:yaw.x,pitch:pitch.x,size:size.x,lid:lid.x,gYaw:gYaw.x,gPitch:gPitch.x}),fps:()=>fps,rscale:()=>rscale};
+window.__astrid={drive,trace,snapLid:v=>snap(lid,v),setEyes,eyes:()=>({name:eyesName,a:SH.a,b:SH.b,t:shapeT.x}),pet:()=>({down:pet.down,content:pet.content,happy:happy.x,lid:lid.x,roll:roll.x,press:press.x,body:bodyA.x,breath:breath.x,revs:pet.revs.length,lastTickle:pet.lastTickle,simT:CK.simT,voice:Voice.stats()}),bench,get T(){return T},state:()=>state,pose:()=>({yaw:yaw.x,pitch:pitch.x,size:size.x,lid:lid.x,gYaw:gYaw.x,gPitch:gPitch.x}),fps:()=>fps,rscale:()=>rscale};
 })();
 </script>
 </body>

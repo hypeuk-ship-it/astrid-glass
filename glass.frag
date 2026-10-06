@@ -3,7 +3,8 @@
 // Look (matches Henlo's reference): a white frosted form that bleeds into the paper with a Gaussian edge
 // (no outline, no glint), a pale luminous blue pool glowing up from the BOTTOM and fading to white haze
 // at the top, a faint pink/cyan prism smear only along the soft lower boundary, and big bright white
-// stadium "pebble" eyes with a slight RGB split and a faint inner shade.
+// "pebble" eyes (stadium by default; egg, dot, oval, bean, squircle by uniform) with a slight RGB split
+// and a faint inner shade.
 // Layering (bottom → top):
 //   frost(p)  : paper · white bloom into the page · frosted body (Gaussian edge)      [fixed]
 //   pool(p)   : drifting blob field (pool, deep floor, bloom) moved by the delayed, inverted head turn,
@@ -34,10 +35,13 @@ uniform vec3  uBloomCol, uLiftCol, uTouchCol;  // per coat: mix(mid,edge,.35) ·
 uniform vec4  uAura;    // rgb: mix(core,mid,.3), a: 0.42·(1 − 0.4·dark)
 uniform vec2  uMode;    // x: unused, y: dark (0/1)
 uniform vec4  uRot;     // eyes: cos yaw, sin yaw, cos pitch, sin pitch
-uniform vec4  uEyeP;    // eyes: stadium half-width (rad), cap half-length (rad), lidFade, capsule radius (units)
+uniform vec4  uEyeP;    // eyes: -, -, lidFade (morph-blended), capsule radius (units)
+uniform vec4  uEyeA;    // eye box (radians): half width, half visible height (morph-blended), 1/hw, 1/hh
+uniform vec4  uShape;   // eye shape params: corner radius ×hw, ellipse weight, egg taper, -
+uniform vec4  uShapeT;  // eye shape params: cos lean, sin lean, bean bow ×hw, -
 uniform vec4  uEyeL, uEyeR; // eyes: tight bounding capsules = projected stadium axis ends (a.xy, b.xy), screen units
 uniform vec4  uEyeK;    // eyes: soft edge w, glow k, aura k (exp2 factors), 1/hw
-uniform vec4  uEyeK2;   // eyes: 1/(2(cap+hw)), rim-shade edge (−0.7·hw·RR), lat centre (0.04+lift), arc/hw
+uniform vec4  uEyeK2;   // eyes: 1/(2·hh), rim-shade edge (−0.7·hw·RR), lat centre (0.04+lift), arc/hw (morph-blended box)
 uniform vec4  uFace;    // cos roll, sin roll, -, -
 uniform vec4  uQ;       // head-turn map (inverted gaze + foreshorten): q = pl·xy + zw
 uniform mat2  uBA, uBB, uBC; // blobs (floor, pool, bloom): drift⁻¹ with 1/radii folded in
@@ -64,13 +68,31 @@ vec3 tint(vec3 col, vec3 c, float a){
   return mix(mix(col, c, a), 1.0 - (1.0 - col) * (1.0 - c * a * 0.8), uMode.y);
 }
 
+// ---- eye shapes: ONE parametric SDF in eye-local sphere coords (radians; < 0 inside), box b = (half w,
+// half h). Every shape is a parameter set (face.js SHAPES / eyeSDFP): stadium = rounded box with r = hw,
+// squircle r = .55hw, dot = round box, oval = ellipse, egg = tapered ellipse, bean = leaning bowed ellipse.
+// A shape switch lerps the params on the CPU → no branches, one evaluation per tap, even mid-morph.
+float eyeSDF(vec2 p, vec2 b, float side){
+  vec2 ib = uEyeA.zw;                                                     // 1/b (CPU)
+  vec2 q = vec2(uShapeT.x * p.x + side * uShapeT.y * p.y, -side * uShapeT.y * p.x + uShapeT.x * p.y);  // lean
+  float yn = clamp(q.y * ib.y, -1.0, 1.0);
+  q.x -= side * uShapeT.z * b.x * (1.0 - yn * yn);                       // bow
+  float g = 1.0 - uShape.z * yn; q.x /= g;                                // taper (egg)
+  float r = uShape.x * b.x; vec2 k = abs(q) - b + r;
+  float dR = length(max(k, 0.0)) + min(max(k.x, k.y), 0.0) - r;           // rounded box
+  vec2 e0 = q * ib, e1 = e0 * ib;                                         // ellipse (gradient-normalised
+  float k0 = length(e0);                                                  //  approx, exact on the edge)
+  float dE = k0 * (k0 - 1.0) * inversesqrt(max(dot(e1, e1), 1e-8));
+  return mix(dR, dE, uShape.y) * g;
+}
+
 // eye shading for one chroma tap, given its sphere coordinates (lon, lat) and visible-hemisphere Z
 vec3 eyeTap(vec3 col, float lon, float lat, float Z){
-  float hw = uEyeP.x, cap = uEyeP.y;
-  float u = lon - (lon < 0.0 ? -0.2 : 0.2);
-  // happy: eyes lift a touch and bow into a soft ∩ (edges droop) — same stadium, never flatter
+  float side = lon < 0.0 ? -1.0 : 1.0;
+  float u = lon - 0.2 * side;
+  // happy: eyes lift a touch and bow into a soft ∩ (edges droop) — any shape, never flatter than round
   float v = lat - uEyeK2.z + uEyeK2.w * u * u;
-  float d  = length(vec2(u, v - clamp(v, -cap, cap))) - hw;   // radians
+  float d = eyeSDF(vec2(u, v), uEyeA.xy, side);                            // radians
   float ds = d * RR * (0.5 * Z + 0.5);                        // ≈ screen units (foreshortened)
   float w  = uEyeK.x;
   float vis = uEyeP.z * smoothstep(0.02, 0.08, Z);            // lidFade · z>0.02 cull
