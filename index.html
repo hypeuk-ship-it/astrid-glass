@@ -14,13 +14,15 @@
   #gl{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
   .stage{position:relative;width:min(84vmin,620px);aspect-ratio:1;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:none;border-radius:50%;outline:none}
   .stage:focus-visible{box-shadow:0 0 0 2px var(--ink)}
+  .stage{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+  html,body{overscroll-behavior:none}
   .coats{position:fixed;left:0;right:0;bottom:22px;display:flex;justify-content:center;gap:10px;align-items:center}
   .coats button{width:22px;height:22px;border-radius:50%;border:1px solid rgba(0,0,0,.15);cursor:pointer;padding:0;outline-offset:3px}
-  .coats button[aria-pressed=true]{outline:1.5px solid var(--ink)}
-  .coats .mode{width:auto;height:22px;border-radius:11px;padding:0 10px;background:transparent;color:var(--ink);font:inherit;border-color:currentColor;opacity:.7}
+  .coats button[data-c][aria-pressed=true]{outline:1.5px solid var(--ink)}
+  .coats .mode,.coats .snd{width:auto;height:22px;border-radius:11px;padding:0 10px;background:transparent;color:var(--ink);font:inherit;border-color:currentColor;opacity:.7}
   /* debug panel (?debug or press d) */
   #dbg{position:fixed;top:12px;right:12px;width:236px;padding:10px 12px 12px;border-radius:12px;background:rgba(18,20,28,.82);color:#e8ecf4;
-       font:500 11px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);display:none;z-index:5;box-shadow:0 6px 24px rgba(0,0,0,.25)}
+       font:500 11px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);display:none;z-index:5;box-shadow:0 6px 24px rgba(0,0,0,.25);max-height:calc(100vh - 24px);overflow-y:auto;overscroll-behavior:contain}
   #dbg.on{display:block}
   #dbg h4{margin:0 0 8px;font-size:11px;display:flex;justify-content:space-between;letter-spacing:.04em}
   #dbg h4 b{color:#8fe3ff;font-weight:600}
@@ -53,6 +55,7 @@
 //   haze      : white veil, heavier toward the top                                    [fixed]
 //   fringe    : pink outside / cyan inside where the pool meets the frosted margin, strongest low
 //   eyes      : soft blue-white glow + white pebble fill, sampled 3× (R/G/B) → gentle chromatic edge
+//   petting   : body squash/stretch (whole frame), contact lens dent + soft brightening under the finger
 // Port note (Metal): uniforms map 1:1 to a constant buffer; plain functions; no textures.
 #ifdef GL_FRAGMENT_PRECISION_HIGH
 precision highp float;
@@ -72,6 +75,9 @@ uniform vec2  uTA, uTB, uTC; // blob drift: drift origin (120,144.8) + translate
 uniform float uNT;      // noise time (advanced by JS × drift speed, wrapped at 28900)
 uniform vec4  uTune1;   // eye RGB split, edge softness, haze, pool height
 uniform vec4  uTune2;   // eye softness, fringe, noise warp (units), pool strength
+uniform vec4  uTouch;   // petting contact: x, y (units), pressure 0..1 (sprung), dent strength
+uniform mat2  uBodyM;   // petting squash/stretch: inverse body transform about the orb centre
+uniform vec4  uFace;    // cos roll, sin roll, happy eye lift (rad of lat), happy arc (0..~.4)
 
 const vec2  C  = vec2(120.0, 120.0);
 const float R  = 118.0;   // orb
@@ -103,7 +109,8 @@ vec3 tint(vec3 col, vec3 c, float a){
 vec3 eyes(vec3 col, vec2 p){
   vec2 el = p - uEyeC.xy, er = p - uEyeC.zw;
   if (min(dot(el, el), dot(er, er)) > uEyeP.w * uEyeP.w) return col;   // far from both eyes
-  vec2 s = (p - C) / RR; s.y = -s.y;
+  vec2 s0 = (p - C) / RR; s0.y = -s0.y;
+  vec2 s = vec2(s0.x*uFace.x + s0.y*uFace.y, -s0.x*uFace.y + s0.y*uFace.x);   // undo roll
   float rr = dot(s, s);
   if (rr >= 1.0 || uEyeP.z <= 0.0) return col;
   float Z  = sqrt(1.0 - rr);
@@ -112,8 +119,10 @@ vec3 eyes(vec3 col, vec2 p){
   float y  = s.y*uRot.z + z1*uRot.w;
   float z  = -s.y*uRot.w + z1*uRot.z;
   float lon = atan(x, z), lat = asin(clamp(y, -1.0, 1.0));
-  float u = lon - (lon < 0.0 ? -0.2 : 0.2), v = lat - 0.04;
   float hw = uEyeP.x, cap = uEyeP.y;
+  float u = lon - (lon < 0.0 ? -0.2 : 0.2);
+  // happy: eyes lift a touch and bow into a soft ∩ (edges droop) — same stadium, never flatter
+  float v = lat - 0.04 - uFace.z + uFace.w * u * u / max(hw, 1e-4);
   float d  = length(vec2(u, v - clamp(v, -cap, cap))) - hw;   // radians
   float ds = d * RR * mix(Z, 1.0, 0.5);                       // ≈ screen units (foreshortened)
   float w  = 0.8 * uTune2.x + 0.4;
@@ -138,6 +147,7 @@ vec3 eyes(vec3 col, vec2 p){
 void main(){
   vec2 f = gl_FragCoord.xy;
   vec2 p = C + vec2(f.x - uView.x, uView.y - f.y) * uView.z;
+  p = C + uBodyM * (p - C);                    // petting squash/stretch (identity at rest)
   vec2 d = p - C; float r = length(d * 0.01) * 100.0;   // scaled: no fp16 overflow far off-orb (mediump)
   float es = uTune1.y;
   float low = (p.y - C.y) / R;                 // −1 top … +1 bottom
@@ -151,11 +161,15 @@ void main(){
 
   if (r < R + 12.0) {
     // ---- pool: head-turn (inverted, delayed) → noise warp → random-target drift ----
-    vec2 np = p * 0.016;
+    // ---- petting contact: a shallow dent under the finger (concave lens → slight minify) ----
+    vec2 pt = p - uTouch.xy;
+    float tg = gauss(length(pt), 34.0) * uTouch.z;
+    vec2 pl = p + pt * (0.22 * uTouch.w * tg);
+    vec2 np = pl * 0.016;
     vec2 warp = vec2(vnoise(np + vec2(uNT*0.11, uNT*0.05)) + 0.5*vnoise(np*2.1 + vec2(-uNT*0.07, uNT*0.09) + 3.7),
                      vnoise(np + vec2(7.1 - uNT*0.06, 2.3 + uNT*0.10)) + 0.5*vnoise(np*2.1 + vec2(uNT*0.08, -uNT*0.06) + 9.2)) - 0.75;
     warp *= uTune2.z;
-    vec2 q = (p - C - uCoreM.xy) / uCoreM.zw + C + warp;
+    vec2 q = (pl - C - uCoreM.xy) / uCoreM.zw + C + warp;
     float ph = uTune1.w;
     // main pool: a broad dome rising from below the orb
     vec2 qb = undrift(q, uMB, uTB);
@@ -198,7 +212,10 @@ void main(){
     // ---- eyes: 3 taps (R/G/B) at slightly different positions → gentle chromatic edge ----
     vec2 dir = r > 1e-3 ? d / r : vec2(0.0);
     vec2 off = (dir * (0.8 + 2.2 * min(r / R, 1.0)) + vec2(1.5, 0.0)) * uTune1.x * mix(1.0, 0.7, uMode.y);
-    col = vec3(eyes(col, p + off).r, eyes(col, p).g, eyes(col, p - off).b);
+    col = vec3(eyes(col, pl + off).r, eyes(col, pl).g, eyes(col, pl - off).b);
+    // contact light: the glass brightens softly where it's touched; dent walls shade (light top-left)
+    col = tint(col, mix(uHalo, uGlow, uMode.y), 0.34 * tg * body);
+    col += vec3(0.05 * uTouch.w * tg * body * dot(pt / 34.0, vec2(0.7, 0.7)));
   }
 
   col += (hash(mod(f, 64.0)) - 0.5) / 255.0;   // dither (kills 8-bit banding); mod keeps mediump finite
@@ -230,7 +247,8 @@ const store={get(k){try{return localStorage.getItem(k)}catch(e){return null}},
 
 /* ---------------- tuning (debug sliders) ---------------- */
 const TUNE_KEY='astridTuneVibe';
-const TUNE_DEF={lag:110,gk:.022,gd:.72,follow:.8,dSpeed:1,dAmt:1,edge:1,haze:1,poolH:1,poolI:1,fringe:1,split:1,eyeScale:1.3,eyeSoft:1};
+const TUNE_DEF={lag:110,gk:.022,gd:.72,follow:.8,dSpeed:1,dAmt:1,edge:1,haze:1,poolH:1,poolI:1,fringe:1,split:1,eyeScale:1.3,eyeSoft:1,
+  cBuild:1,cDecay:1,tickle:900,dent:1,pull:1,vol:1};
 const SLIDERS=[
   ['lag','glass lag (ms)',0,400,5],
   ['gk','glass spring k',.004,.12,.001],
@@ -246,6 +264,12 @@ const SLIDERS=[
   ['split','eye RGB split',0,3,.05],
   ['eyeScale','eye size',.8,1.6,.01],
   ['eyeSoft','eye softness',0,3,.05],
+  ['cBuild','content build',0,3,.05],
+  ['cDecay','content decay',0,3,.05],
+  ['tickle','tickle threshold (u/s)',400,2000,10],
+  ['dent','dent strength',0,3,.05],
+  ['pull','pull strength',0,3,.05],
+  ['vol','voice volume',0,2,.05],
 ];
 function loadTune(){            // only known keys, finite, clamped to the slider range
   const t=Object.assign({},TUNE_DEF); let s=null;
@@ -261,7 +285,7 @@ const GL_OPTS={antialias:false,alpha:false,depth:false,stencil:false,premultipli
 const toFallback=why=>{console.warn('Astrid: '+why+', using the SVG fallback'); location.replace('v6-svg.html'+location.search);};
 const gl=cv.getContext('webgl',GL_OPTS)||cv.getContext('experimental-webgl',GL_OPTS);
 if(!gl){ toFallback('WebGL unavailable'); return; }
-const UNIFORMS=['uView','uPaper','uCore','uDeep','uMid','uEdge','uHalo','uEye','uEyeHi','uEyeLo','uGlow','uMode','uRot','uEyeP','uEyeC','uCoreM','uMA','uMB','uMC','uTA','uTB','uTC','uNT','uTune1','uTune2'];
+const UNIFORMS=['uTouch','uBodyM','uFace','uView','uPaper','uCore','uDeep','uMid','uEdge','uHalo','uEye','uEyeHi','uEyeLo','uGlow','uMode','uRot','uEyeP','uEyeC','uCoreM','uMA','uMB','uMC','uTA','uTB','uTC','uNT','uTune1','uTune2'];
 let U={}, lost=false;
 function initGL(){              // (re)build everything GPU-side; also used after a context restore
   const sh=(type,id)=>{const s=gl.createShader(type);gl.shaderSource(s,$(id).textContent);gl.compileShader(s);
@@ -342,6 +366,75 @@ const mb=document.createElement('button'); mb.type='button'; mb.id='modeBtn'; mb
 mb.onclick=e=>{e.stopPropagation();applyCoat(state.name,!state.dark)}; bar.appendChild(mb);
 bar.addEventListener('pointerdown',e=>e.stopPropagation());
 
+/* ---------------- voice: tiny WebAudio synth (cute, small, a little high; WALL-E-ish scoops) ----------------
+   Each chirp = triangle + soft octave sine through a moving vowel formant ("oo"→"ee") and a lowpass, with a
+   pitch scoop (dip, swoop up, settle) and a quick soft envelope. Unlocks on the first user gesture only.
+   Rate-limited and quiet; nodes are disconnected when they finish (no leaks). Mute is remembered. */
+const Voice=(()=>{
+  const AC=window.AudioContext||window.webkitAudioContext;
+  let ctx=null, out=null, muted=store.get('astridMute')==='1', last=-1, played=0;
+  function unlock(){
+    if(!AC) return;
+    const ua=navigator.userActivation; if(ua&&!ua.isActive) return;   // only inside a real gesture (no autoplay warning)
+    if(!ctx){
+      try{ ctx=new AC(); }catch(e){ return; }
+      const comp=ctx.createDynamicsCompressor(); comp.threshold.value=-18; comp.ratio.value=4;
+      out=ctx.createGain(); out.gain.value=.5; out.connect(comp); comp.connect(ctx.destination);
+    }
+    if(ctx.state==='suspended') ctx.resume().catch(()=>{});
+  }
+  // one scooped chirp starting at time t0 (ctx time). f: settle pitch (Hz). shape: [start×, peak×, end×]
+  function chirp1(t0,f,dur,amp,shape){
+    const o1=ctx.createOscillator(), o2=ctx.createOscillator(), g2=ctx.createGain();
+    const bp=ctx.createBiquadFilter(), lp=ctx.createBiquadFilter(), env=ctx.createGain();
+    o1.type='triangle'; o2.type='sine'; g2.gain.value=.22;
+    bp.type='bandpass'; bp.Q.value=1.6; lp.type='lowpass'; lp.frequency.value=3200; lp.Q.value=.5;
+    const [a,b,c]=shape, tp=t0+dur*.45, te=t0+dur;
+    [[o1.frequency,1],[o2.frequency,2.004]].forEach(([fr,m])=>{
+      fr.setValueAtTime(f*a*m,t0); fr.exponentialRampToValueAtTime(f*b*m,tp); fr.exponentialRampToValueAtTime(f*c*m,te);
+    });
+    bp.frequency.setValueAtTime(800,t0); bp.frequency.exponentialRampToValueAtTime(2100,tp); bp.frequency.exponentialRampToValueAtTime(1500,te);
+    env.gain.setValueAtTime(.0001,t0); env.gain.exponentialRampToValueAtTime(amp,t0+.016);
+    env.gain.exponentialRampToValueAtTime(amp*.55,tp); env.gain.exponentialRampToValueAtTime(.0001,te);
+    const dry=ctx.createGain(); dry.gain.value=.35;              // a little un-filtered body under the formant
+    o1.connect(bp); o2.connect(g2); g2.connect(bp); o1.connect(dry);
+    bp.connect(lp); dry.connect(lp); lp.connect(env); env.connect(out);
+    o1.start(t0); o2.start(t0); o1.stop(te+.02); o2.stop(te+.02);
+    o1.onended=()=>{[o1,o2,g2,bp,lp,env,dry].forEach(n=>{try{n.disconnect()}catch(e){}});};
+    played++;
+  }
+  const ready=gap=>{
+    if(muted||!ctx||ctx.state!=='running') return false;
+    const now=ctx.currentTime; if(now-last<gap) return false; last=now; return true;
+  };
+  const vol=()=>.11*Math.max(0,T.vol);
+  return {
+    unlock,
+    /* contented chirp: pitch rises with content (≈560 → 950 Hz), sometimes a second little "mm-hm" */
+    chirp(c){ if(!ready(.6)||vol()<=0) return; const t=ctx.currentTime+.01, f=560*(1+.7*c)*(1+(Math.random()-.5)*.06);
+      chirp1(t,f,.2+.06*Math.random(),vol()*(.7+.3*c),[.72,1.18,1.04]);
+      if(c>.55&&Math.random()<.4) chirp1(t+.2,f*1.12,.14,vol()*.6,[.85,1.2,1.1]); },
+    /* tickle: giggly double chirp, higher, the second one tumbling down */
+    giggle(){ if(!ready(.7)||vol()<=0) return; const t=ctx.currentTime+.01, f=1020*(1+(Math.random()-.5)*.08);
+      chirp1(t,f,.11,vol()*.9,[.8,1.25,1.12]); chirp1(t+.095,f*1.14,.13,vol()*.8,[1.1,1.22,.86]);
+      if(Math.random()<.35) chirp1(t+.2,f*1.05,.1,vol()*.5,[1.05,1.15,.8]); },
+    get muted(){return muted;},
+    setMuted(m){ muted=!!m; store.set('astridMute',muted?'1':'0'); if(!muted) unlock(); },
+    suspend(){ if(ctx&&ctx.state==='running') ctx.suspend().catch(()=>{}); },
+    resume(){ if(ctx&&ctx.state==='suspended') ctx.resume().catch(()=>{}); },
+    stats:()=>({ctx:ctx?ctx.state:'none',muted,played}),
+  };
+})();
+/* unlock on the first real gesture. Touch: pointerdown is NOT an activation event (pointerup/touchend are) */
+const gest=['pointerdown','pointerup','touchend','keydown','click'];
+const unlockOnGesture=()=>{ Voice.unlock(); if(Voice.stats().ctx==='running') gest.forEach(t=>removeEventListener(t,unlockOnGesture,true)); };
+gest.forEach(t=>addEventListener(t,unlockOnGesture,{capture:true,passive:true}));
+const sb=document.createElement('button'); sb.type='button'; sb.className='snd';
+const showSnd=()=>{sb.textContent=Voice.muted?'Muted':'Sound'; sb.setAttribute('aria-pressed',String(!Voice.muted)); sb.title=Voice.muted?'Unmute Astrid':'Mute Astrid';};
+sb.onclick=e=>{e.stopPropagation(); Voice.setMuted(!Voice.muted); showSnd();};
+showSnd(); bar.appendChild(sb);
+document.addEventListener('visibilitychange',()=>document.hidden?Voice.suspend():Voice.resume());
+
 /* ---------------- pose + glass state ---------------- */
 const yaw=spring(0,.07,.74), pitch=spring(0,.07,.74), size=spring(1,.16,.62), lid=spring(1,.45,.5);
 const gYaw=spring(0,T.gk,T.gd), gPitch=spring(0,T.gk,T.gd);
@@ -376,23 +469,115 @@ addEventListener('pointerdown',aim,{passive:true});          // touch has no hov
 const lookHome=()=>{ if(!forced){yaw.t=0;pitch.t=0;} };       // pointer left the window → eyes come home
 document.addEventListener('pointerout',e=>{ if(!e.relatedTarget&&e.pointerType==='mouse') lookHome(); },{passive:true});
 addEventListener('blur',lookHome);
-const blink=()=>{blinkUntil=simT+110;};
+const blink=(ms)=>{blinkUntil=Math.max(blinkUntil,simT+(ms||110));};
 const tap=()=>{size.v+=.09; blink();};
-stage.addEventListener('click',tap);
-stage.addEventListener('keydown',e=>{ if(e.key==='Enter'||e.key===' '){e.preventDefault();tap();} });
+stage.addEventListener('keydown',e=>{ if(e.key==='Enter'||e.key===' '){e.preventDefault();Voice.unlock();tap();} });
+const R_HIT=128;
+
+/* ================= petting ================= */
+/* Units: AstridFace 240-space (orb r118 at 120,120); speeds in units/s. All decisions run inside tick()
+   (fixed 60 Hz), so the feel is identical at 30/60/120 Hz. Pointer events only record raw positions. */
+const roll=spring(0,.12,.7), happy=spring(0,.06,.8);             // face: tickle wiggle roll, eased content
+const press=spring(0,.14,.62), tX=spring(120,.3,.55), tY=spring(120,.3,.55);   // contact: pressure + spot
+const dragX=spring(0,T.gk,T.gd), dragY=spring(0,T.gk,T.gd);      // pool pulled along the stroke (glass lag)
+const bodyA=spring(0,.1,.8);                                     // squash/stretch amount (wobbles on release)
+ALL.push(roll,happy,press,tX,tY,dragX,dragY,bodyA);
+const pet={down:false,id:-1,in:false,x:120,y:120,px:120,py:120,vx:0,vy:0,dx:1,dy:0,path:0,downAt:0,
+           lx:0,ly:0,revs:[],lastCalm:-1e9,lastTickle:-1e9,content:0,nextChirp:0,bx:1,by:0};
+const qContent=Q.has('content')?Math.max(0,Math.min(1,+Q.get('content')||0)):null;   // test hook: pin content
+const blinkQ=[], kickQ=[];
+const toUnits=e=>{const r=stage.getBoundingClientRect(), k=340/r.width;
+  return {x:120+(e.clientX-(r.left+r.width/2))*k, y:120+(e.clientY-(r.top+r.height/2))*k};};
+let suppressClick=false;
+stage.addEventListener('pointerdown',e=>{
+  if(e.button>0||forced) return;
+  Voice.unlock(); suppressClick=true;
+  const u=toUnits(e);
+  try{stage.setPointerCapture(e.pointerId);}catch(_){}
+  e.preventDefault();                                            // no text selection / emulated mouse / scroll
+  Object.assign(pet,{down:true,id:e.pointerId,x:u.x,y:u.y,px:u.x,py:u.y,lx:0,ly:0,path:0,downAt:simT});
+  pet.revs.length=0;
+});
+stage.addEventListener('pointermove',e=>{
+  if(!pet.down||e.pointerId!==pet.id) return;
+  const u=toUnits(e); pet.path+=Math.hypot(u.x-pet.x,u.y-pet.y); pet.x=u.x; pet.y=u.y;
+},{passive:true});
+const petEnd=e=>{
+  if(!pet.down||(e&&e.pointerId!==pet.id)) return;
+  pet.down=false;
+  if(simT-pet.downAt<260&&pet.path<6) tap();                    // a short tap keeps the old tap reaction
+};
+stage.addEventListener('pointerup',petEnd); stage.addEventListener('pointercancel',petEnd);
+stage.addEventListener('lostpointercapture',petEnd);
+stage.addEventListener('click',()=>{ if(suppressClick){suppressClick=false;return;} tap(); });   // AT / synthetic clicks
+stage.addEventListener('contextmenu',e=>{ if(pet.down) e.preventDefault(); });
+
+function tickle(){
+  const fresh=simT-pet.lastTickle>1200;                          // first tickle of a scrub gets the full burst
+  pet.lastTickle=simT; pet.content=Math.min(1,pet.content+.06);
+  const sg=Math.random()<.5?-1:1;
+  [0,85,170].forEach((t,i)=>kickQ.push({t:simT+t,s:(i%2?-sg:sg)*(i===2?.6:1)}));   // quick wiggle
+  (fresh?[0,160,320]:[0]).forEach(t=>blinkQ.push(simT+t));                            // blink burst (short blinks)
+  bodyA.v+=.02;
+  Voice.giggle();
+}
+function petTick(dt){
+  const P=pet, inOrb=Math.hypot(P.x-120,P.y-120)<R_HIT;
+  let rsp=0;
+  if(P.down){
+    const mx=P.x-P.px, my=P.y-P.py; P.px=P.x; P.py=P.y;
+    const vx=mx*1000/dt, vy=my*1000/dt; rsp=Math.hypot(vx,vy);
+    P.vx+=(vx-P.vx)*.35; P.vy+=(vy-P.vy)*.35;
+    // direction reversals (scrubbing): raw step direction flips against the last stroke direction
+    if(rsp>150&&inOrb){
+      const ux=vx/rsp, uy=vy/rsp;
+      if(ux*P.lx+uy*P.ly<-.2) P.revs.push(simT);
+      P.lx=ux; P.ly=uy;
+    }
+  } else { P.vx*=.8; P.vy*=.8; }
+  while(P.revs.length&&P.revs[0]<simT-700) P.revs.shift();
+  const sp=Math.hypot(P.vx,P.vy);
+  if(sp>60){ P.bx=P.vx/sp; P.by=P.vy/sp; }
+  const stroking=P.down&&inOrb;
+  // speed bands
+  if(stroking&&simT-P.downAt>100&&(sp>T.tickle||P.revs.length>=3)){
+    if(simT-P.lastTickle>450) tickle();
+  } else if(stroking&&sp>25&&sp<Math.min(T.tickle*.6,560)){
+    const gentle=Math.min(1,(sp-25)/90)*(1-Math.max(0,(sp-320)/(Math.min(T.tickle*.6,560)-320+1e-3))*.6);
+    P.content=Math.min(1,P.content+.42*T.cBuild*gentle*dt/1000);
+    P.lastCalm=simT;
+    if(P.content>.12&&simT>=P.nextChirp){ Voice.chirp(P.content); P.nextChirp=simT+1100+Math.random()*700; }
+  }
+  // afterglow: hold the happy face ~1.5 s after the last stroke, then decay back to rest life
+  if(simT-Math.max(P.lastCalm,P.lastTickle)>1500) P.content=Math.max(0,P.content-.35*T.cDecay*dt/1000);
+  if(qContent!==null) P.content=qContent;
+  happy.t=P.content;
+  // contact + pool drag + body
+  press.t=stroking?1:0;
+  if(press.x<.02&&stroking){ snap(tX,P.x); snap(tY,P.y); } else { tX.t=P.x; tY.t=P.y; }
+  dragX.k=dragY.k=T.gk; dragX.d=dragY.d=T.gd;
+  const lim=40, pk=.05*T.pull;
+  dragX.t=stroking?Math.max(-lim,Math.min(lim,P.vx*pk)):0; dragY.t=stroking?Math.max(-lim,Math.min(lim,P.vy*pk)):0;
+  bodyA.t=stroking?Math.min(1,sp/700)*.07:0;
+  while(kickQ.length&&kickQ[0].t<=simT){const k=kickQ.shift(); yaw.v+=.07*k.s; roll.v+=.09*k.s;}
+  while(blinkQ.length&&blinkQ[0]<=simT){blinkQ.shift(); blink(70);}
+  [roll,happy,press,tX,tY,dragX,dragY,bodyA].forEach(step);
+}
 
 function tick(){            // one fixed 60 Hz step of the whole motion model
   ALL.forEach(save); prevNT=noiseT;
   const dt=STEP; simT+=dt;
   if(!forced&&!still){
     if(simT>=nextGlance){
-      if(!RM&&simT-pointerAt>2500){const home=Math.random()<.45; yaw.t=home?0:(Math.random()*2-1)*.36; pitch.t=home?0:(Math.random()*2-1)*.2;}
+      if(!RM&&simT-pointerAt>2500&&happy.x<.15&&!pet.down){const home=Math.random()<.45; yaw.t=home?0:(Math.random()*2-1)*.36; pitch.t=home?0:(Math.random()*2-1)*.2;}
       nextGlance=simT+1800+Math.random()*2600;
     }
     if(simT>=nextBlink){ blink(); if(Math.random()<.18) doubleAt=simT+260; nextBlink=simT+2800+Math.random()*3400; }
     if(doubleAt>0&&simT>=doubleAt){ blink(); doubleAt=-1; }
   }
-  lid.t=simT<blinkUntil?0:1;
+  petTick(dt);
+  // happy eyes: lid comes down with content → the stadium shortens toward (never past) a circle
+  lid.t=simT<blinkUntil?0:1-.5*Math.max(0,Math.min(1,happy.x));
   step(yaw);step(pitch);step(size);step(lid);
   // glass follows the pose from LAG ms ago on a heavier, softer spring (eyes lead)
   hist.push({t:simT,y:yaw.x,p:pitch.x});
@@ -421,13 +606,20 @@ function pushUniforms(a){
   const Y=at(yaw,a), P=at(pitch,a), gy=at(gYaw,a), gp=at(gPitch,a);
   const cy=Math.cos(Y),sy=Math.sin(Y),cp=Math.cos(P),sp=Math.sin(P);
   gl.uniform4f(U.uRot,cy,sy,cp,sp);
-  const e=F.eyeUniforms(at(size,a)*T.eyeScale,at(lid,a)), xf=F.projector(Y,P,0);   // stadiumOf keeps it ≥ a circle
-  const cl=xf(-F.REST.lon,F.REST.lat), cr=xf(F.REST.lon,F.REST.lat);
+  const Rl=at(roll,a), hp=Math.max(0,Math.min(1,at(happy,a))), lift=.035*hp;
+  gl.uniform4f(U.uFace,Math.cos(Rl),Math.sin(Rl),lift,.15*hp);
+  const e=F.eyeUniforms(at(size,a)*T.eyeScale,at(lid,a)), xf=F.projector(Y,P,Rl);   // stadiumOf keeps it ≥ a circle
+  const cl=xf(-F.REST.lon,F.REST.lat+lift), cr=xf(F.REST.lon,F.REST.lat+lift);
   gl.uniform4f(U.uEyeP,e.hw,e.cap,e.fade,(e.hw+e.cap)*RR+24+8*T.eyeSoft+4*T.split);
   gl.uniform4f(U.uEyeC,cl.x,cl.y,cr.x,cr.y);
   // head turn: INVERTED to the gaze, foreshortened at the side
   const gsy=Math.sin(gy), gsp=Math.sin(gp), k=RR*T.follow;
-  gl.uniform4f(U.uCoreM,-gsy*k,-gsp*Math.cos(gy)*k,1-.16*Math.abs(gsy),1-.16*Math.abs(gsp));
+  gl.uniform4f(U.uCoreM,-gsy*k+at(dragX,a),-gsp*Math.cos(gy)*k+at(dragY,a),1-.16*Math.abs(gsy),1-.16*Math.abs(gsp));
+  // petting: contact (pressure sprung in/out) + squash/stretch along the stroke, inverse matrix
+  gl.uniform4f(U.uTouch,at(tX,a),at(tY,a),Math.max(0,at(press,a)),T.dent);
+  const ba=at(bodyA,a), ux=pet.bx, uy=pet.by, sa=1/(1+ba), sb=1/Math.max(.5,1-.6*ba);   // stretch along, squash across
+  m2[0]=sa*ux*ux+sb*uy*uy; m2[1]=(sa-sb)*ux*uy; m2[2]=m2[1]; m2[3]=sa*uy*uy+sb*ux*ux;
+  gl.uniformMatrix2fv(U.uBodyM,false,m2);
   // blob drift → inverse affine per blob: M⁻¹ = S⁻¹·R(−r) (column-major mat2), origin+translate
   const bm=[U.uMA,U.uMB,U.uMC], bt=[U.uTA,U.uTB,U.uTC];
   drifts.forEach((d,i)=>{
@@ -526,7 +718,7 @@ start();
 /* bench: n synchronous draws with a 1-px readback → ms per frame (renderer cost only) */
 function bench(n){n=n||60;const was=!!raf;stop();pushUniforms(0);gl.drawArrays(gl.TRIANGLES,0,3);gl.finish();const t0=performance.now();
   const px=new Uint8Array(4);for(let i=0;i<n;i++){tick();pushUniforms(0);gl.drawArrays(gl.TRIANGLES,0,3);gl.readPixels(0,0,1,1,gl.RGBA,gl.UNSIGNED_BYTE,px);} const ms=(performance.now()-t0)/n; if(was)start(); return ms;}
-window.__astrid={bench,get T(){return T},state:()=>state,pose:()=>({yaw:yaw.x,pitch:pitch.x,size:size.x,lid:lid.x,gYaw:gYaw.x,gPitch:gPitch.x}),fps:()=>fps,rscale:()=>rscale};
+window.__astrid={pet:()=>({down:pet.down,content:pet.content,happy:happy.x,lid:lid.x,roll:roll.x,press:press.x,body:bodyA.x,revs:pet.revs.length,lastTickle:pet.lastTickle,simT,voice:Voice.stats()}),bench,get T(){return T},state:()=>state,pose:()=>({yaw:yaw.x,pitch:pitch.x,size:size.x,lid:lid.x,gYaw:gYaw.x,gPitch:gPitch.x}),fps:()=>fps,rscale:()=>rscale};
 })();
 </script>
 </body>

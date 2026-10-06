@@ -11,6 +11,7 @@
 //   haze      : white veil, heavier toward the top                                    [fixed]
 //   fringe    : pink outside / cyan inside where the pool meets the frosted margin, strongest low
 //   eyes      : soft blue-white glow + white pebble fill, sampled 3× (R/G/B) → gentle chromatic edge
+//   petting   : body squash/stretch (whole frame), contact lens dent + soft brightening under the finger
 // Port note (Metal): uniforms map 1:1 to a constant buffer; plain functions; no textures.
 #ifdef GL_FRAGMENT_PRECISION_HIGH
 precision highp float;
@@ -30,6 +31,9 @@ uniform vec2  uTA, uTB, uTC; // blob drift: drift origin (120,144.8) + translate
 uniform float uNT;      // noise time (advanced by JS × drift speed, wrapped at 28900)
 uniform vec4  uTune1;   // eye RGB split, edge softness, haze, pool height
 uniform vec4  uTune2;   // eye softness, fringe, noise warp (units), pool strength
+uniform vec4  uTouch;   // petting contact: x, y (units), pressure 0..1 (sprung), dent strength
+uniform mat2  uBodyM;   // petting squash/stretch: inverse body transform about the orb centre
+uniform vec4  uFace;    // cos roll, sin roll, happy eye lift (rad of lat), happy arc (0..~.4)
 
 const vec2  C  = vec2(120.0, 120.0);
 const float R  = 118.0;   // orb
@@ -61,7 +65,8 @@ vec3 tint(vec3 col, vec3 c, float a){
 vec3 eyes(vec3 col, vec2 p){
   vec2 el = p - uEyeC.xy, er = p - uEyeC.zw;
   if (min(dot(el, el), dot(er, er)) > uEyeP.w * uEyeP.w) return col;   // far from both eyes
-  vec2 s = (p - C) / RR; s.y = -s.y;
+  vec2 s0 = (p - C) / RR; s0.y = -s0.y;
+  vec2 s = vec2(s0.x*uFace.x + s0.y*uFace.y, -s0.x*uFace.y + s0.y*uFace.x);   // undo roll
   float rr = dot(s, s);
   if (rr >= 1.0 || uEyeP.z <= 0.0) return col;
   float Z  = sqrt(1.0 - rr);
@@ -70,8 +75,10 @@ vec3 eyes(vec3 col, vec2 p){
   float y  = s.y*uRot.z + z1*uRot.w;
   float z  = -s.y*uRot.w + z1*uRot.z;
   float lon = atan(x, z), lat = asin(clamp(y, -1.0, 1.0));
-  float u = lon - (lon < 0.0 ? -0.2 : 0.2), v = lat - 0.04;
   float hw = uEyeP.x, cap = uEyeP.y;
+  float u = lon - (lon < 0.0 ? -0.2 : 0.2);
+  // happy: eyes lift a touch and bow into a soft ∩ (edges droop) — same stadium, never flatter
+  float v = lat - 0.04 - uFace.z + uFace.w * u * u / max(hw, 1e-4);
   float d  = length(vec2(u, v - clamp(v, -cap, cap))) - hw;   // radians
   float ds = d * RR * mix(Z, 1.0, 0.5);                       // ≈ screen units (foreshortened)
   float w  = 0.8 * uTune2.x + 0.4;
@@ -96,6 +103,7 @@ vec3 eyes(vec3 col, vec2 p){
 void main(){
   vec2 f = gl_FragCoord.xy;
   vec2 p = C + vec2(f.x - uView.x, uView.y - f.y) * uView.z;
+  p = C + uBodyM * (p - C);                    // petting squash/stretch (identity at rest)
   vec2 d = p - C; float r = length(d * 0.01) * 100.0;   // scaled: no fp16 overflow far off-orb (mediump)
   float es = uTune1.y;
   float low = (p.y - C.y) / R;                 // −1 top … +1 bottom
@@ -109,11 +117,15 @@ void main(){
 
   if (r < R + 12.0) {
     // ---- pool: head-turn (inverted, delayed) → noise warp → random-target drift ----
-    vec2 np = p * 0.016;
+    // ---- petting contact: a shallow dent under the finger (concave lens → slight minify) ----
+    vec2 pt = p - uTouch.xy;
+    float tg = gauss(length(pt), 34.0) * uTouch.z;
+    vec2 pl = p + pt * (0.22 * uTouch.w * tg);
+    vec2 np = pl * 0.016;
     vec2 warp = vec2(vnoise(np + vec2(uNT*0.11, uNT*0.05)) + 0.5*vnoise(np*2.1 + vec2(-uNT*0.07, uNT*0.09) + 3.7),
                      vnoise(np + vec2(7.1 - uNT*0.06, 2.3 + uNT*0.10)) + 0.5*vnoise(np*2.1 + vec2(uNT*0.08, -uNT*0.06) + 9.2)) - 0.75;
     warp *= uTune2.z;
-    vec2 q = (p - C - uCoreM.xy) / uCoreM.zw + C + warp;
+    vec2 q = (pl - C - uCoreM.xy) / uCoreM.zw + C + warp;
     float ph = uTune1.w;
     // main pool: a broad dome rising from below the orb
     vec2 qb = undrift(q, uMB, uTB);
@@ -156,7 +168,10 @@ void main(){
     // ---- eyes: 3 taps (R/G/B) at slightly different positions → gentle chromatic edge ----
     vec2 dir = r > 1e-3 ? d / r : vec2(0.0);
     vec2 off = (dir * (0.8 + 2.2 * min(r / R, 1.0)) + vec2(1.5, 0.0)) * uTune1.x * mix(1.0, 0.7, uMode.y);
-    col = vec3(eyes(col, p + off).r, eyes(col, p).g, eyes(col, p - off).b);
+    col = vec3(eyes(col, pl + off).r, eyes(col, pl).g, eyes(col, pl - off).b);
+    // contact light: the glass brightens softly where it's touched; dent walls shade (light top-left)
+    col = tint(col, mix(uHalo, uGlow, uMode.y), 0.34 * tg * body);
+    col += vec3(0.05 * uTouch.w * tg * body * dot(pt / 34.0, vec2(0.7, 0.7)));
   }
 
   col += (hash(mod(f, 64.0)) - 0.5) / 255.0;   // dither (kills 8-bit banding); mod keeps mediump finite
