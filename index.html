@@ -104,6 +104,7 @@ uniform vec4  uRimP;    // toon rim after the shared warp ('toon'; 0,0,1 = none)
 uniform vec4  uPupil;   // pupil centre (rad, eye-local): inward rest, gaze u, v; SDF scale of the dart stretch
 uniform mat2  uPupilM;  // pupil dart stretch: eye-local → pupil frame (identity at rest)
 uniform vec4  uPupilA;  // pupil semi-axes a, b and 1/a, 1/b (rad)
+uniform vec4  uPupilC;  // per-eye pupil centre offsets from the soft containment (face.js containPupil): L xy, R zw
 uniform vec3  uToonCol; // toon ink: the coat's dark/mark tone
 uniform vec4  uShadow;  // eye drop shadow: strength, lat offset down (rad), gauss k (exp2), -
 uniform vec4  uShapeC;  // eye lid (radians): egg-centre offset, lid line (rel. to centre), corner k, -
@@ -172,9 +173,14 @@ float eyeSDF(vec2 p, vec2 b, float side, vec3 rp){
   return smax(d, pl.y - uShapeC.y, uShapeC.z) * min(sx, 1.0);             // lid from the top ('top' shapes; parked)
 }
 
+// toon pupil coverage (unclipped), computed by the centre tap (always called first) and reused by the two side
+// taps: the pupil is painted INTO each tap's white colour, so the white's own edge clips it (one AA edge, no
+// seam against the rim behind, no light line) and the pupil itself never gets an RGB split. gFillMax = the union
+// of the three taps' white fills: the pupil is laid over all three channels there too, so where it nears the
+// white's edge (e.g. foreshortened at the limb) the edge's colour split never shows on it.
+float gCovP, gFillMax;
 // eye shading for one chroma tap, given its sphere coordinates (lon, lat) and visible-hemisphere Z
-float gPupil;   // toon pupil coverage, written by the centre tap
-vec3 eyeTap(vec3 col, float lon, float lat, float Z, float rimA){
+vec3 eyeTap(vec3 col, float lon, float lat, float Z, float rimA, float pc){
   float side = lon < 0.0 ? -1.0 : 1.0;
   float u = lon - uShapeT.w * side;
   // happy: eyes lift a touch and bow into a soft ∩ (edges droop) — any shape, never flatter than round
@@ -194,19 +200,24 @@ vec3 eyeTap(vec3 col, float lon, float lat, float Z, float rimA){
   vec3 ec  = t < 0.5 ? mix(uEyeHi, uEye, t * 2.0) : mix(uEye, uEyeLo, 0.55 * smoothstep(0.55, 1.0, t));
   float rimShade = smoothstep(uEyeK2.y, 0.0, ds) * smoothstep(0.3, 0.9, t);
   ec = mix(ec, uEyeLo, 0.4 * rimShade);
-  // toon pupil (face.js sdPupil): upright dark oval clipped by the white → lid/squint/blink cover it too.
-  // Centre tap only (rimA ≥ 0 marks it): no RGB fringe on the pupil; applied after the three taps.
+  // toon pupil (face.js sdPupil): upright dark oval inside the white (soft containment keeps it clear of the
+  // edge; lids/squint/blink cover it). Evaluated on the centre tap only (pc = 1), reused by the side taps.
 #ifdef TOON
-  if (uToon.y > 0.0 && rimA >= 0.0) {
+  if (uToon.y > 0.0 && pc > 0.5) {
     float psx = 1.0 + side * uAsym.x;                           // pupils follow the 3/4 asymmetry
-    vec2 pq = uPupilM * vec2(u / psx + side * uPupil.x - uPupil.y, v + side * uAsym.y - uPupil.z);   // dart stretch
+    vec2 pc2 = side < 0.0 ? uPupilC.xy : uPupilC.zw;            // soft containment (stays inside the white)
+    vec2 pq = uPupilM * vec2(u / psx + side * uPupil.x - uPupil.y - pc2.x, v + side * uAsym.y - uPupil.z - pc2.y);   // dart stretch
     vec2 p0 = pq * uPupilA.zw, p1 = p0 * uPupilA.zw;
     float pk = length(p0);
     float dp = pk * (pk - 1.0) * inversesqrt(max(dot(p1, p1), 1e-8)) * min(psx, 1.0) * uPupil.w * RR * (0.5 * Z + 0.5);
-    gPupil = uToon.y * vis * (1.0 - smoothstep(-w, w, max(dp, ds)));
+    gCovP = uToon.y * (1.0 - smoothstep(-w, w, dp));
   }
+  ec = mix(ec, uToonCol, gCovP);
 #endif
   float fill = 1.0 - smoothstep(-w, w, ds);
+#ifdef TOON
+  gFillMax = max(gFillMax, fill * vis);
+#endif
   return mix(col, ec, fill * vis);
 }
 // soft offset drop shadow (ambient occlusion on the pool): the eye SDF sampled a little lower, Gaussian
@@ -267,15 +278,15 @@ vec3 eyes(vec3 col, vec2 p, vec2 off){
   // toon variant (compiled only while the toon layer is on: '#define TOON' is prepended by index.html)
   float rimA = 0.0;                                            // ≥ 0 on the centre tap, ≤ 0 on the side taps
   if (uToon.x > 0.0) { rimA = eyeRim(lon, lat, Z); col = mix(col, uToonCol, rimA); }
-  gPupil = 0.0;
-  float cg = eyeTap(col, lon, lat, Z, rimA).g;                 // centre tap (also the pupil)
-  vec3 c = vec3(eyeTap(col, lon + dl.x, lat + dl.y, Z + dl.z, -rimA).r, cg,
-                eyeTap(col, lon - dl.x, lat - dl.y, Z - dl.z, -rimA).b);   // −rimA: side taps skip the pupil
-  return mix(c, uToonCol, gPupil);
+  gCovP = 0.0; gFillMax = 0.0;
+  float cg = eyeTap(col, lon, lat, Z, rimA, 1.0).g;            // centre tap (also the pupil)
+  vec3 c = vec3(eyeTap(col, lon + dl.x, lat + dl.y, Z + dl.z, -rimA, 0.0).r, cg,
+                eyeTap(col, lon - dl.x, lat - dl.y, Z - dl.z, -rimA, 0.0).b);   // side taps skip the pupil
+  return mix(c, uToonCol, gCovP * gFillMax);
 #else
-  return vec3(eyeTap(col, lon + dl.x, lat + dl.y, Z + dl.z, 0.0).r,
-              eyeTap(col, lon, lat, Z, 0.0).g,
-              eyeTap(col, lon - dl.x, lat - dl.y, Z - dl.z, 0.0).b);
+  return vec3(eyeTap(col, lon + dl.x, lat + dl.y, Z + dl.z, 0.0, 0.0).r,
+              eyeTap(col, lon, lat, Z, 0.0, 0.0).g,
+              eyeTap(col, lon - dl.x, lat - dl.y, Z - dl.z, 0.0, 0.0).b);
 #endif
 }
 
@@ -378,9 +389,9 @@ void main(){
   gl_Position = vec4(aPos, 0.0, 1.0);
 }
 </script>
-<script src="coats.js?v=10062355"></script>
-<script src="springs.js?v=10062355"></script>
-<script src="face.js?v=10062355"></script>
+<script src="coats.js?v=10070005"></script>
+<script src="springs.js?v=10070005"></script>
+<script src="face.js?v=10070005"></script>
 <script>
 (function(){
 'use strict';
@@ -454,7 +465,7 @@ const toFallback=why=>{console.warn('Astrid: '+why+', using the SVG fallback'); 
 const gl=cv.getContext('webgl',GL_OPTS)||cv.getContext('experimental-webgl',GL_OPTS);
 if(!gl){ toFallback('WebGL unavailable'); return; }
 const UNIFORMS=['uVS','uBodyM','uNT','uWarp','uPaper','uCore','uDeep','uMid','uEdge','uHalo','uEye','uEyeHi','uEyeLo','uGlow','uBloomCol','uLiftCol','uTouchCol','uAura','uMode',
-  'uRot','uEyeP','uEyeA','uShape','uShapeT','uShapeC','uAsym','uCutN','uLat','uShadow','uToon','uToonR','uRimP','uPupil','uPupilA','uPupilM','uToonCol','uEyeL','uEyeR','uEyeK','uEyeK2','uFace','uQ','uBA','uBB','uBC','uCA','uCB','uCC','uFrost','uPoolK','uFringeK','uMisc','uTouch'];
+  'uRot','uEyeP','uEyeA','uShape','uShapeT','uShapeC','uAsym','uCutN','uLat','uShadow','uToon','uToonR','uRimP','uPupil','uPupilA','uPupilM','uPupilC','uToonCol','uEyeL','uEyeR','uEyeK','uEyeK2','uFace','uQ','uBA','uBB','uBC','uCA','uCB','uCC','uFrost','uPoolK','uFringeK','uMisc','uTouch'];
 let U={}, lost=false; const GN=24, GCOUNT=GN*GN*6;
 const draw=()=>gl.drawElements(gl.TRIANGLES,GCOUNT,gl.UNSIGNED_SHORT,0);
 /* The program comes in two variants: plain, and with '#define TOON' (the toon eye layer). Only the variant in
@@ -941,12 +952,12 @@ function tick(){            // one fixed 60 Hz step of the whole motion model
 }
 const EYE={hw:.5,hh:.5,cap:.5,fade:.5,ex:.5,oy:.5,vtop:.5,ck:.5,asx:.5,asy:.5,cut:.5,cutk:.5,nLx:.5,nLy:.5,nRx:.5,nRy:.5}, EYEB={hw:.5,hh:.5,cap:.5,fade:.5,ex:.5,oy:.5,vtop:.5,ck:.5,asx:.5,asy:.5,cut:.5,cutk:.5,nLx:.5,nLy:.5,nRx:.5,nRy:.5}, EV3=new Float64Array(8), PA={x:.5,y:.5,z:.5}, PB={x:.5,y:.5,z:.5}, PJ=new Float64Array(8), EV=new Float64Array(2),
       EYO={hw:.5,hh:.5,cap:.5,fade:.5,ex:.5,oy:.5,vtop:.5,ck:.5,asx:.5,asy:.5,cut:.5,cutk:.5,nLx:.5,nLy:.5,nRx:.5,nRy:.5}, EYOB={hw:.5,hh:.5,cap:.5,fade:.5,ex:.5,oy:.5,vtop:.5,ck:.5,asx:.5,asy:.5,cut:.5,cutk:.5,nLx:.5,nLy:.5,nRx:.5,nRy:.5},
-      TBOX={hw:.5,hh:.5,oy:.5}, TOPEN={hw:.5,hh:.5}, TK={rim:.5,pupil:.5,follow:.5,dil:.5,stretch:.5,sdx:.5,sdy:.5}, TO={ox:.5,oy:.5,grow:.5,rs:.5,rpo:.5,rpu:.5,a:.5,b:.5,pin:.5,pu:.5,pv:.5,m0:.5,m1:.5,m3:.5,ms:.5},
-      TP={ro:.5,ru:.5,rg:.5,rs:.5,rpo:.5,rpu:.5,pa:.5,pb:.5,pin:.5,pdown:.5}, TPK=Object.keys(TP);
+      TBOX={hw:.5,hh:.5,oy:.5}, TOPEN={hw:.5,hh:.5}, TK={rim:.5,pupil:.5,follow:.5,dil:.5,stretch:.5,sdx:.5,sdy:.5}, TO={ox:.5,oy:.5,grow:.5,rs:.5,rpo:.5,rpu:.5,a:.5,b:.5,pin:.5,pu:.5,pv:.5,m0:.5,m1:.5,m3:.5,ms:.5,cuL:.5,cvL:.5,cuR:.5,cvR:.5},
+      TP={ro:.5,ru:.5,rg:.5,rs:.5,rpo:.5,rpu:.5,pa:.5,pb:.5,pin:.5,pdown:.5,r:.5,e:.5,taper:.5,tilt:.5,bend:.5,lki:.5,lkm:.5,lko:.5}, TPK=Object.keys(TP);
 /* uniform staging: preallocated Float32Arrays + uniform*fv. Passing doubles straight to gl.uniform4f boxes
    each argument (a heap number per value per frame); writing into typed arrays doesn't allocate at all. */
 const F32=n=>new Float32Array(n);
-const vEyeA=F32(4), vShape=F32(4), vShapeT=F32(4), vShapeC=F32(4), vAsym=F32(4), vCutN=F32(4), vLat=F32(4), vShadow=F32(4), vToon=F32(4), vToonR=F32(4), vRimP=F32(4), vPupil=F32(4), vPupilA=F32(4), mPupil=F32(4), vRot=F32(4), vFace=F32(4), vEyeP=F32(4), vEyeL=F32(4), vEyeR=F32(4), vEyeK=F32(4), vEyeK2=F32(4), vQ=F32(4),
+const vEyeA=F32(4), vShape=F32(4), vShapeT=F32(4), vShapeC=F32(4), vAsym=F32(4), vCutN=F32(4), vLat=F32(4), vShadow=F32(4), vToon=F32(4), vToonR=F32(4), vRimP=F32(4), vPupil=F32(4), vPupilA=F32(4), mPupil=F32(4), vPupilC=F32(4), vRot=F32(4), vFace=F32(4), vEyeP=F32(4), vEyeL=F32(4), vEyeR=F32(4), vEyeK=F32(4), vEyeK2=F32(4), vQ=F32(4),
       vFrost=F32(4), vPoolK=F32(4), vFringeK=F32(4), vMisc=F32(4), vTouch=F32(4), vNT=F32(1), vWarp=F32(1), mBody=F32(4),
       mBlob=[F32(4),F32(4),F32(4)], vBlobC=[F32(2),F32(2),F32(2)];
 const LOG2E=Math.LOG2E, gk=w=>-LOG2E/(w*w);                 // gauss(x,w)=exp2(x²·gk(w))
@@ -1004,12 +1015,13 @@ function pushUniforms(){
     TBOX.hw=ehw; TBOX.hh=ehh; TBOX.oy=eoy; TOPEN.hw=EYO.hw+(EYOB.hw-EYO.hw)*mt; TOPEN.hh=EYO.hh+(EYOB.hh-EYO.hh)*mt;
     TK.rim=T.rimK; TK.pupil=T.pupilK; TK.follow=T.pupilF;
     TK.dil=at(pupD,a); TK.stretch=at(pStr,a); TK.sdx=PSV.dx; TK.sdy=PSV.dy;          // toon pupil life
-    for(let i=0;i<TPK.length;i++){ const q=TPK[i]; TP[q]=SA[q]+(SB[q]-SA[q])*mt; }   // per-shape rim/pupil params
+    for(let i=0;i<TPK.length;i++){ const q=TPK[i]; TP[q]=SA[q]+(SB[q]-SA[q])*mt; }   // per-shape rim/pupil + SDF params
     F.toonV(TO,TBOX,TOPEN,at(pupX,a)/.5,at(pupY,a)/.34,TK,TP);
     vToon[2]=TO.grow; vToonR[0]=TO.ox; vToonR[1]=TO.oy; gl.uniform4fv(U.uToonR,vToonR);
     vRimP[0]=TO.rpo; vRimP[1]=TO.rpu; vRimP[2]=TO.rs; gl.uniform4fv(U.uRimP,vRimP);
     vPupil[0]=TO.pin; vPupil[1]=TO.pu; vPupil[2]=TO.pv; vPupil[3]=TO.ms; gl.uniform4fv(U.uPupil,vPupil);
     mPupil[0]=TO.m0; mPupil[1]=TO.m1; mPupil[2]=TO.m1; mPupil[3]=TO.m3; gl.uniformMatrix2fv(U.uPupilM,false,mPupil);
+    vPupilC[0]=TO.cuL; vPupilC[1]=TO.cvL; vPupilC[2]=TO.cuR; vPupilC[3]=TO.cvR; gl.uniform4fv(U.uPupilC,vPupilC);   // containment
     vPupilA[0]=TO.a; vPupilA[1]=TO.b; vPupilA[2]=1/TO.a; vPupilA[3]=1/TO.b; gl.uniform4fv(U.uPupilA,vPupilA);
   }
   gl.uniform4fv(U.uToon,vToon);
@@ -1183,7 +1195,7 @@ function drive(steps){
 /* test hook: trace(steps) runs the same scripted sim without drawing → per tick [breath, content, size, lid, yaw, pitch,
    pupil dilation, pupil stretch, pupil x, pupil y] */
 const trace=steps=>{stop(); const r=[]; driveSteps(steps,r); return JSON.stringify(r);};
-window.__astrid={drive,trace,snapLid:v=>snap(lid,v),setEyes,setToon,toon:()=>({on:toonOn,a:toonA.x,px:pupX.x,py:pupY.x,yaw:yaw.x,pitch:pitch.x,dil:pupD.x,stretch:pStr.x,armed:PSV.armed,sdx:PSV.dx,sdy:PSV.dy}),eyes:()=>({name:eyesName,a:SH.a,b:SH.b,t:shapeT.x}),pet:()=>({down:pet.down,content:pet.content,happy:happy.x,lid:lid.x,roll:roll.x,press:press.x,body:bodyA.x,breath:breath.x,revs:pet.revs.length,lastTickle:pet.lastTickle,simT:CK.simT,voice:Voice.stats()}),bench,get T(){return T},state:()=>state,pose:()=>({yaw:yaw.x,pitch:pitch.x,size:size.x,lid:lid.x,gYaw:gYaw.x,gPitch:gPitch.x}),fps:()=>fps,rscale:()=>rscale};
+window.__astrid={drive,trace,snapLid:v=>snap(lid,v),setEyes,setToon,toon:()=>({on:toonOn,a:toonA.x,px:pupX.x,py:pupY.x,yaw:yaw.x,pitch:pitch.x,dil:pupD.x,stretch:pStr.x,armed:PSV.armed,sdx:PSV.dx,sdy:PSV.dy,contain:[TO.cuL,TO.cvL,TO.cuR,TO.cvR]}),eyes:()=>({name:eyesName,a:SH.a,b:SH.b,t:shapeT.x}),pet:()=>({down:pet.down,content:pet.content,happy:happy.x,lid:lid.x,roll:roll.x,press:press.x,body:bodyA.x,breath:breath.x,revs:pet.revs.length,lastTickle:pet.lastTickle,simT:CK.simT,voice:Voice.stats()}),bench,get T(){return T},state:()=>state,pose:()=>({yaw:yaw.x,pitch:pitch.x,size:size.x,lid:lid.x,gYaw:gYaw.x,gPitch:gPitch.x}),fps:()=>fps,rscale:()=>rscale};
 })();
 </script>
 </body>

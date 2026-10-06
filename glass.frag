@@ -48,6 +48,7 @@ uniform vec4  uRimP;    // toon rim after the shared warp ('toon'; 0,0,1 = none)
 uniform vec4  uPupil;   // pupil centre (rad, eye-local): inward rest, gaze u, v; SDF scale of the dart stretch
 uniform mat2  uPupilM;  // pupil dart stretch: eye-local → pupil frame (identity at rest)
 uniform vec4  uPupilA;  // pupil semi-axes a, b and 1/a, 1/b (rad)
+uniform vec4  uPupilC;  // per-eye pupil centre offsets from the soft containment (face.js containPupil): L xy, R zw
 uniform vec3  uToonCol; // toon ink: the coat's dark/mark tone
 uniform vec4  uShadow;  // eye drop shadow: strength, lat offset down (rad), gauss k (exp2), -
 uniform vec4  uShapeC;  // eye lid (radians): egg-centre offset, lid line (rel. to centre), corner k, -
@@ -116,9 +117,14 @@ float eyeSDF(vec2 p, vec2 b, float side, vec3 rp){
   return smax(d, pl.y - uShapeC.y, uShapeC.z) * min(sx, 1.0);             // lid from the top ('top' shapes; parked)
 }
 
+// toon pupil coverage (unclipped), computed by the centre tap (always called first) and reused by the two side
+// taps: the pupil is painted INTO each tap's white colour, so the white's own edge clips it (one AA edge, no
+// seam against the rim behind, no light line) and the pupil itself never gets an RGB split. gFillMax = the union
+// of the three taps' white fills: the pupil is laid over all three channels there too, so where it nears the
+// white's edge (e.g. foreshortened at the limb) the edge's colour split never shows on it.
+float gCovP, gFillMax;
 // eye shading for one chroma tap, given its sphere coordinates (lon, lat) and visible-hemisphere Z
-float gPupil;   // toon pupil coverage, written by the centre tap
-vec3 eyeTap(vec3 col, float lon, float lat, float Z, float rimA){
+vec3 eyeTap(vec3 col, float lon, float lat, float Z, float rimA, float pc){
   float side = lon < 0.0 ? -1.0 : 1.0;
   float u = lon - uShapeT.w * side;
   // happy: eyes lift a touch and bow into a soft ∩ (edges droop) — any shape, never flatter than round
@@ -138,19 +144,24 @@ vec3 eyeTap(vec3 col, float lon, float lat, float Z, float rimA){
   vec3 ec  = t < 0.5 ? mix(uEyeHi, uEye, t * 2.0) : mix(uEye, uEyeLo, 0.55 * smoothstep(0.55, 1.0, t));
   float rimShade = smoothstep(uEyeK2.y, 0.0, ds) * smoothstep(0.3, 0.9, t);
   ec = mix(ec, uEyeLo, 0.4 * rimShade);
-  // toon pupil (face.js sdPupil): upright dark oval clipped by the white → lid/squint/blink cover it too.
-  // Centre tap only (rimA ≥ 0 marks it): no RGB fringe on the pupil; applied after the three taps.
+  // toon pupil (face.js sdPupil): upright dark oval inside the white (soft containment keeps it clear of the
+  // edge; lids/squint/blink cover it). Evaluated on the centre tap only (pc = 1), reused by the side taps.
 #ifdef TOON
-  if (uToon.y > 0.0 && rimA >= 0.0) {
+  if (uToon.y > 0.0 && pc > 0.5) {
     float psx = 1.0 + side * uAsym.x;                           // pupils follow the 3/4 asymmetry
-    vec2 pq = uPupilM * vec2(u / psx + side * uPupil.x - uPupil.y, v + side * uAsym.y - uPupil.z);   // dart stretch
+    vec2 pc2 = side < 0.0 ? uPupilC.xy : uPupilC.zw;            // soft containment (stays inside the white)
+    vec2 pq = uPupilM * vec2(u / psx + side * uPupil.x - uPupil.y - pc2.x, v + side * uAsym.y - uPupil.z - pc2.y);   // dart stretch
     vec2 p0 = pq * uPupilA.zw, p1 = p0 * uPupilA.zw;
     float pk = length(p0);
     float dp = pk * (pk - 1.0) * inversesqrt(max(dot(p1, p1), 1e-8)) * min(psx, 1.0) * uPupil.w * RR * (0.5 * Z + 0.5);
-    gPupil = uToon.y * vis * (1.0 - smoothstep(-w, w, max(dp, ds)));
+    gCovP = uToon.y * (1.0 - smoothstep(-w, w, dp));
   }
+  ec = mix(ec, uToonCol, gCovP);
 #endif
   float fill = 1.0 - smoothstep(-w, w, ds);
+#ifdef TOON
+  gFillMax = max(gFillMax, fill * vis);
+#endif
   return mix(col, ec, fill * vis);
 }
 // soft offset drop shadow (ambient occlusion on the pool): the eye SDF sampled a little lower, Gaussian
@@ -211,15 +222,15 @@ vec3 eyes(vec3 col, vec2 p, vec2 off){
   // toon variant (compiled only while the toon layer is on: '#define TOON' is prepended by index.html)
   float rimA = 0.0;                                            // ≥ 0 on the centre tap, ≤ 0 on the side taps
   if (uToon.x > 0.0) { rimA = eyeRim(lon, lat, Z); col = mix(col, uToonCol, rimA); }
-  gPupil = 0.0;
-  float cg = eyeTap(col, lon, lat, Z, rimA).g;                 // centre tap (also the pupil)
-  vec3 c = vec3(eyeTap(col, lon + dl.x, lat + dl.y, Z + dl.z, -rimA).r, cg,
-                eyeTap(col, lon - dl.x, lat - dl.y, Z - dl.z, -rimA).b);   // −rimA: side taps skip the pupil
-  return mix(c, uToonCol, gPupil);
+  gCovP = 0.0; gFillMax = 0.0;
+  float cg = eyeTap(col, lon, lat, Z, rimA, 1.0).g;            // centre tap (also the pupil)
+  vec3 c = vec3(eyeTap(col, lon + dl.x, lat + dl.y, Z + dl.z, -rimA, 0.0).r, cg,
+                eyeTap(col, lon - dl.x, lat - dl.y, Z - dl.z, -rimA, 0.0).b);   // side taps skip the pupil
+  return mix(c, uToonCol, gCovP * gFillMax);
 #else
-  return vec3(eyeTap(col, lon + dl.x, lat + dl.y, Z + dl.z, 0.0).r,
-              eyeTap(col, lon, lat, Z, 0.0).g,
-              eyeTap(col, lon - dl.x, lat - dl.y, Z - dl.z, 0.0).b);
+  return vec3(eyeTap(col, lon + dl.x, lat + dl.y, Z + dl.z, 0.0, 0.0).r,
+              eyeTap(col, lon, lat, Z, 0.0, 0.0).g,
+              eyeTap(col, lon - dl.x, lat - dl.y, Z - dl.z, 0.0, 0.0).b);
 #endif
 }
 

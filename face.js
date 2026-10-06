@@ -222,9 +222,10 @@
      into the pupil frame, o.ms = its SDF scale; exactly identity at rest).
      All radians, eye-local (u, v as eyeSDFP; side = −1 left, +1 right; inward = −side·u).
      toonV(o, box, open, gx, gy, k, P) → o.ox, o.oy, o.grow, o.rs, o.rpo, o.rpu (rim), o.a, o.b, o.pin, o.pu, o.pv,
-       o.m0, o.m1, o.m3, o.ms (pupil). box = current {hw, hh, oy}; open = the same shape at lid 1 {hw, hh};
+       o.m0, o.m1, o.m3, o.ms, o.cuL, o.cvL, o.cuR, o.cvR (pupil; c* = per-eye containment offsets). box = current {hw, hh, oy}; open = the same shape at lid 1 {hw, hh};
        gx, gy = pupil gaze in −1…1 (+x right, +y down, from the pupil spring); k = {rim, pupil, follow, dil,
-       stretch, sdx, sdy} (slider factors 1 = default); P = per-shape params (SHAPES fields, morph-lerped; omit = classic). */
+       stretch, sdx, sdy} (slider factors 1 = default); P = per-shape params (SHAPES fields, morph-lerped; omit = classic;
+       with the SDF fields r, e, taper, tilt, bend, lk* the pupils are also kept inside the white, see containPupil). */
   const TOON={rimOut:.15, rimUp:.24, rimGrow:.05, pa:.43, pb:.63, pin:.17, pdown:.14, fu:.5, fv:.45, dilMax:1.22, sAlong:.2, sAcross:.15};
   const TOONP=Object.freeze({ro:TOON.rimOut, ru:TOON.rimUp, rg:TOON.rimGrow, rs:1, rpo:0, rpu:0, pa:TOON.pa, pb:TOON.pb, pin:TOON.pin, pdown:TOON.pdown});
   function toonV(o,box,open,gx,gy,k,P){
@@ -236,13 +237,64 @@
     o.a=P.pa*hw0*k.pupil*dil; o.b=P.pb*hh0*k.pupil*dil;
     o.pin=P.pin*hw0;
     o.pu=clamp(gx,-1,1)*k.follow*TOON.fu*Math.max(0,hw0-o.a);
-    o.pv=(box.oy||0)+(-P.pdown*hh0-clamp(gy,-1,1)*k.follow*TOON.fv*Math.max(0,hh0-o.b))*Math.min(1,sq);
+    const pvb=-P.pdown*hh0-clamp(gy,-1,1)*k.follow*TOON.fv*Math.max(0,hh0-o.b), ks=Math.min(1,sq);
+    o.pv=(box.oy||0)+pvb*ks;
     const am=clamp(k.stretch||0,0,1);
     if(am>1e-4){
       const sa=1/(1+TOON.sAlong*am), sc=1/(1-TOON.sAcross*am), dx=k.sdx, dy=k.sdy;
       o.m0=sa*dx*dx+sc*dy*dy; o.m1=(sa-sc)*dx*dy; o.m3=sa*dy*dy+sc*dx*dx; o.ms=1-TOON.sAcross*am;
     } else { o.m0=1; o.m1=0; o.m3=1; o.ms=1; }
+    // soft containment (needs the shape's SDF params in P): per eye, nudge the pupil centre so its lower half and
+    // sides stay inside the CURRENT white (lattice warp included) with a small margin; its top may still go under
+    // a lid / squint / blink, which covers it (no lid lines in this test)
+    o.cuL=o.cvL=o.cuR=o.cvR=0;
+    if(P.r!==undefined){
+      const bw=Math.max(box.hw,1e-4), bh=Math.max(box.hh,1e-4);
+      // too big to fit even after moving (dilated in a squashed squint / narrow shape)? shrink both pupils by the
+      // same smooth factor (from the residual penetration; never below the undilated size: past that the white's
+      // edge clips it like a lid), then place each one
+      containPupil(o,-1,o.pin+o.pu,pvb*ks,P,bw,bh); const rL=CP.res;
+      containPupil(o, 1,-o.pin+o.pu,pvb*ks,P,bw,bh); const rR=CP.res;
+      const fit=Math.max(1/dil,1/(1+Math.max(rL,rR)/(.6*Math.min(o.a,o.b))));   // gives back at most the dilation
+      if(fit<1){ o.a*=fit; o.b*=fit; }
+      containPupil(o,-1,o.pin+o.pu,pvb*ks,P,bw,bh); o.cuL=CP.u; o.cvL=CP.v;
+      containPupil(o, 1,-o.pin+o.pu,pvb*ks,P,bw,bh); o.cuR=CP.u; o.cvR=CP.v;
+    }
     return o;
+  }
+  /* containPupil: the pupil oval (centre cu, cv relative to the white's centre; o.a, o.b; stretch map o.m*) sampled
+     at N boundary points against the white's SDF (eyeSDFP with box hw, hh; no lids). The upper points are faded
+     out (fixed weights by angle: a lid may cover the top). Penetration = log-sum-exp of the samples (a smooth max) + margin; a C¹ soft hinge (exactly 0 when clear, so resting pupils don't move) pushes the
+     centre along the softmax-weighted inward normal; 4 fixed iterations. Every step is a continuous function of
+     gaze / dilation / stretch / morph → no popping, spring-friendly. Result → CP.u, CP.v (centre offset, rad) and
+     CP.res (the soft-hinged penetration left after the last step: > 0 only if the oval can't fit). */
+  const NCP=20, CPC=new Float64Array(NCP), CPS=new Float64Array(NCP), CPD=new Float64Array(NCP), CPU=new Float64Array(NCP), CPV=new Float64Array(NCP);
+  const CPW=new Float64Array(NCP);                         // 0 = counts fully (lower half, sides) … −1 = ignored (top)
+  for(let i=0;i<NCP;i++){ CPC[i]=Math.cos(2*Math.PI*i/NCP); CPS[i]=Math.sin(2*Math.PI*i/NCP);
+    const t=clamp((CPS[i]-.15)/.45,0,1); CPW[i]=-t*t*(3-2*t); }
+  const CP={u:.5,v:.5,res:.5}; CP.u=CP.v=CP.res=0;
+  const CPK={margin:.06, tau:.012, hinge:.03};             // × the white's current hh
+  function containPupil(o,side,cu,cv,P,hw0,hh0){
+    const m=CPK.margin*hh0, tau=CPK.tau*hh0, kh=CPK.hinge*hh0;
+    const det=o.m0*o.m3-o.m1*o.m1, i0=o.m3/det, i1=-o.m1/det, i3=o.m0/det;
+    const ihw2=1/(hw0*hw0), ihh2=1/(hh0*hh0);
+    let du=0, dv=0, s=0, pen=0;
+    for(let it=0;it<5;it++){
+      let mx=-1e9;
+      for(let i=0;i<NCP;i++){
+        const ex=o.a*CPC[i], ey=o.b*CPS[i], qu=cu+du+i0*ex+i1*ey, qv=cv+dv+i1*ex+i3*ey;
+        const d=eyeSDFP(qu,qv,hw0,hh0,side,P)+CPW[i]*hh0; CPD[i]=d; CPU[i]=qu; CPV[i]=qv; if(d>mx) mx=d;
+      }
+      let se=0, nu=0, nv=0;
+      for(let i=0;i<NCP;i++){
+        const w=Math.exp((CPD[i]-mx)/tau), gu=CPU[i]*ihw2, gv=CPV[i]*ihh2, gl=Math.sqrt(gu*gu+gv*gv)||1;
+        se+=w; nu+=w*gu/gl; nv+=w*gv/gl;
+      }
+      pen=mx+tau*Math.log(se)+m; s=pen<=-kh?0:pen<kh?(pen+kh)*(pen+kh)/(4*kh):pen;
+      if(s<=0||it===4) break;                                  // the 5th pass only measures the residual
+      const nl=Math.sqrt(nu*nu+nv*nv)||1; du-=s*nu/nl; dv-=s*nv/nl;
+    }
+    const q=pen-kh; CP.u=du; CP.v=dv; CP.res=q<=-kh?0:q<kh?(q+kh)*(q+kh)/(4*kh):q;   // ignores the hinge's own tail
   }
   // rim SDF (< 0 inside the dark shape; the visible crescent is where this is < 0 and the white's SDF is > 0)
   function sdToonRim(u,v,hw,hh,side,P,C,T){
@@ -253,8 +305,9 @@
   function sdPupil(u,v,side,T,dWhite,C){
     const sx=C&&C.asx!==undefined?1+side*C.asx:1; if(sx!==1||C&&C.asy) { v+=side*C.asy; u/=sx; }
     let pu=u+side*T.pin-T.pu, pv=v-T.pv;
+    if(T.cuL!==undefined){ pu-=side<0?T.cuL:T.cuR; pv-=side<0?T.cvL:T.cvR; }   // soft containment (toonV)
     if(T.m0!==undefined){ const x=T.m0*pu+T.m1*pv, y=T.m1*pu+T.m3*pv; pu=x; pv=y; }
     return Math.max(sdEllipse(pu,pv,T.a,T.b)*Math.min(sx,1)*(T.ms===undefined?1:T.ms),dWhite);
   }
-  window.AstridFace=Object.freeze({SHAPES,eyeShapeV,eyeSDF,eyeSDFP,TOON,TOONP,LIDX,toonV,sdToonRim,sdPupil,sdStadium,sdEgg,sdDot,sdOval,sdBean,sdSquircle,sdRef,sdToon,CX,CY,RR,REST,projector,projectInto,projectV,stadiumOf,lidFade,eyePts,eyeUniforms,eyeInto,eyeV});
+  window.AstridFace=Object.freeze({SHAPES,eyeShapeV,eyeSDF,eyeSDFP,TOON,TOONP,LIDX,CPK,toonV,sdToonRim,sdPupil,sdStadium,sdEgg,sdDot,sdOval,sdBean,sdSquircle,sdRef,sdToon,CX,CY,RR,REST,projector,projectInto,projectV,stadiumOf,lidFade,eyePts,eyeUniforms,eyeInto,eyeV});
 })();
