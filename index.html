@@ -91,6 +91,8 @@ uniform vec4  uEyeP;    // eyes: -, -, lidFade (morph-blended), capsule radius (
 uniform vec4  uEyeA;    // eye box (radians): half width, half visible height (morph-blended), 1/hw, 1/hh
 uniform vec4  uShape;   // eye shape params: corner radius ×hw, ellipse weight, egg taper, -
 uniform vec4  uShapeT;  // eye shape params: cos lean, sin lean, bean bow ×hw, rest lon of the eyes (±)
+uniform vec4  uShadow;  // eye drop shadow: strength, lat offset down (rad), gauss k (exp2), -
+uniform vec4  uShapeC;  // eye lid (radians): egg-centre offset, lid line (rel. to centre), corner k, -
 uniform vec4  uEyeL, uEyeR; // eyes: tight bounding capsules = projected stadium axis ends (a.xy, b.xy), screen units
 uniform vec4  uEyeK;    // eyes: soft edge w, glow k, aura k (exp2 factors), 1/hw
 uniform vec4  uEyeK2;   // eyes: 1/(2·hh), rim-shade edge (−0.7·hw·RR), lat centre (shape rest lat + lift), arc/hw (morph-blended box)
@@ -125,7 +127,10 @@ vec3 tint(vec3 col, vec3 c, float a){
 // squircle r = .55hw, dot = round box, oval = ellipse, egg = tapered ellipse, bean = leaning bowed ellipse,
 // ref = plump (mostly ellipse) egg leaning outward, placed low and wide (rest lon/lat per shape).
 // A shape switch lerps the params on the CPU → no branches, one evaluation per tap, even mid-morph.
+// smooth max: rounds the corner where the lid line meets the shape by ~k
+float smax(float a, float c, float k){ float h = max(k - abs(a - c), 0.0) / k; return max(a, c) + h * h * k * 0.25; }
 float eyeSDF(vec2 p, vec2 b, float side){
+  p.y -= uShapeC.x;                                                       // squint: centre drops ('ref')
   vec2 ib = uEyeA.zw;                                                     // 1/b (CPU)
   vec2 q = vec2(uShapeT.x * p.x + side * uShapeT.y * p.y, -side * uShapeT.y * p.x + uShapeT.x * p.y);  // lean
   float yn = clamp(q.y * ib.y, -1.0, 1.0);
@@ -136,7 +141,8 @@ float eyeSDF(vec2 p, vec2 b, float side){
   vec2 e0 = q * ib, e1 = e0 * ib;                                         // ellipse (gradient-normalised
   float k0 = length(e0);                                                  //  approx, exact on the edge)
   float dE = k0 * (k0 - 1.0) * inversesqrt(max(dot(e1, e1), 1e-8));
-  return mix(dR, dE, uShape.y) * g;
+  float d = mix(dR, dE, uShape.y) * g;
+  return smax(d, p.y - uShapeC.y, uShapeC.z);                             // lid from the top ('ref'; parked above otherwise)
 }
 
 // eye shading for one chroma tap, given its sphere coordinates (lon, lat) and visible-hemisphere Z
@@ -161,6 +167,17 @@ vec3 eyeTap(vec3 col, float lon, float lat, float Z){
   ec = mix(ec, uEyeLo, 0.4 * rimShade);
   float fill = 1.0 - smoothstep(-w, w, ds);
   return mix(col, ec, fill * vis);
+}
+// soft offset drop shadow (ambient occlusion on the pool): the eye SDF sampled a little lower, Gaussian
+// falloff, multiplied toward the deep pool colour → a darker, bluer band hugging the eye's lower edges.
+// Once per pixel (centre tap, before the fill), only inside the eye capsules; follows gaze, lid and fade.
+vec3 eyeShadow(vec3 col, float lon, float lat, float Z){
+  float side = lon < 0.0 ? -1.0 : 1.0;
+  float u = lon - uShapeT.w * side;
+  float v = lat - uEyeK2.z + uEyeK2.w * u * u + uShadow.y;
+  float ds = eyeSDF(vec2(u, v), uEyeA.xy, side) * RR * (0.5 * Z + 0.5);
+  float sh = uShadow.x * uEyeP.z * smoothstep(0.02, 0.08, Z) * g2(max(ds, 0.0), uShadow.z);
+  return col * mix(vec3(1.0), uDeep * 0.85, sh);
 }
 // squared distance from p to segment ab (capsule test without a sqrt)
 float seg2(vec2 p, vec4 ab){ vec2 pa = p - ab.xy, ba = ab.zw - ab.xy;
@@ -190,6 +207,7 @@ vec3 eyes(vec3 col, vec2 p, vec2 off){
   // Δs for the screen offset o: (cr·o.x − sr·o.y, −sr·o.x − cr·o.y)/RR
   vec2 ds_ = vec2(uFace.x*off.x - uFace.y*off.y, -uFace.y*off.x - uFace.x*off.y) * (1.0 / RR);
   vec3 dl = vec3(dot(gLon, ds_), dot(gLat, ds_), dot(gZ, ds_));
+  col = eyeShadow(col, lon, lat, Z);
   return vec3(eyeTap(col, lon + dl.x, lat + dl.y, Z + dl.z).r,
               eyeTap(col, lon, lat, Z).g,
               eyeTap(col, lon - dl.x, lat - dl.y, Z - dl.z).b);
@@ -294,9 +312,9 @@ void main(){
   gl_Position = vec4(aPos, 0.0, 1.0);
 }
 </script>
-<script src="coats.js?v=10062141"></script>
-<script src="springs.js?v=10062141"></script>
-<script src="face.js?v=10062141"></script>
+<script src="coats.js?v=10062215"></script>
+<script src="springs.js?v=10062215"></script>
+<script src="face.js?v=10062215"></script>
 <script>
 (function(){
 'use strict';
@@ -318,7 +336,7 @@ const store={get(k){try{return localStorage.getItem(k)}catch(e){return null}},
 /* ---------------- tuning (debug sliders) ---------------- */
 const TUNE_KEY='astridTuneVibe';
 const TUNE_DEF={lag:110,gk:.022,gd:.72,follow:.8,dSpeed:1,dAmt:1,edge:1,haze:1,poolH:1,poolI:1,fringe:1,split:1,eyeScale:1.3,eyeSoft:1,
-  cBuild:1,cDecay:1,tickle:900,dent:1,pull:1,vol:1,bDepth:1,bRate:1,bCalm:1};
+  cBuild:1,cDecay:1,tickle:900,dent:1,pull:1,vol:1,bDepth:1,bRate:1,bCalm:1,eyeShadow:.3};
 const SLIDERS=[
   ['lag','glass lag (ms)',0,400,5],
   ['gk','glass spring k',.004,.12,.001],
@@ -334,6 +352,7 @@ const SLIDERS=[
   ['split','eye RGB split',0,3,.05],
   ['eyeScale','eye size',.8,1.6,.01],
   ['eyeSoft','eye softness',0,3,.05],
+  ['eyeShadow','eye shadow',0,1,.01],
   ['cBuild','content build',0,3,.05],
   ['cDecay','content decay',0,3,.05],
   ['tickle','tickle threshold (u/s)',400,2000,10],
@@ -359,7 +378,7 @@ const toFallback=why=>{console.warn('Astrid: '+why+', using the SVG fallback'); 
 const gl=cv.getContext('webgl',GL_OPTS)||cv.getContext('experimental-webgl',GL_OPTS);
 if(!gl){ toFallback('WebGL unavailable'); return; }
 const UNIFORMS=['uVS','uBodyM','uNT','uWarp','uPaper','uCore','uDeep','uMid','uEdge','uHalo','uEye','uEyeHi','uEyeLo','uGlow','uBloomCol','uLiftCol','uTouchCol','uAura','uMode',
-  'uRot','uEyeP','uEyeA','uShape','uShapeT','uEyeL','uEyeR','uEyeK','uEyeK2','uFace','uQ','uBA','uBB','uBC','uCA','uCB','uCC','uFrost','uPoolK','uFringeK','uMisc','uTouch'];
+  'uRot','uEyeP','uEyeA','uShape','uShapeT','uShapeC','uShadow','uEyeL','uEyeR','uEyeK','uEyeK2','uFace','uQ','uBA','uBB','uBC','uCA','uCB','uCC','uFrost','uPoolK','uFringeK','uMisc','uTouch'];
 let U={}, lost=false; const GN=24, GCOUNT=GN*GN*6;
 const draw=()=>gl.drawElements(gl.TRIANGLES,GCOUNT,gl.UNSIGNED_SHORT,0);
 function initGL(){              // (re)build everything GPU-side; also used after a context restore
@@ -792,11 +811,11 @@ function tick(){            // one fixed 60 Hz step of the whole motion model
     if(CK.noiseT>=NT_WRAP){CK.noiseT-=NT_WRAP; CK.prevNT-=NT_WRAP;}   // seamless (periodic noise)
   }
 }
-const EYE={hw:.5,hh:.5,cap:.5,fade:.5,ex:.5}, EYEB={hw:.5,hh:.5,cap:.5,fade:.5,ex:.5}, EV3=new Float64Array(3), PA={x:.5,y:.5,z:.5}, PB={x:.5,y:.5,z:.5}, PJ=new Float64Array(8), EV=new Float64Array(2);
+const EYE={hw:.5,hh:.5,cap:.5,fade:.5,ex:.5,oy:.5,vtop:.5,ck:.5}, EYEB={hw:.5,hh:.5,cap:.5,fade:.5,ex:.5,oy:.5,vtop:.5,ck:.5}, EV3=new Float64Array(4), PA={x:.5,y:.5,z:.5}, PB={x:.5,y:.5,z:.5}, PJ=new Float64Array(8), EV=new Float64Array(2);
 /* uniform staging: preallocated Float32Arrays + uniform*fv. Passing doubles straight to gl.uniform4f boxes
    each argument (a heap number per value per frame); writing into typed arrays doesn't allocate at all. */
 const F32=n=>new Float32Array(n);
-const vEyeA=F32(4), vShape=F32(4), vShapeT=F32(4), vRot=F32(4), vFace=F32(4), vEyeP=F32(4), vEyeL=F32(4), vEyeR=F32(4), vEyeK=F32(4), vEyeK2=F32(4), vQ=F32(4),
+const vEyeA=F32(4), vShape=F32(4), vShapeT=F32(4), vShapeC=F32(4), vShadow=F32(4), vRot=F32(4), vFace=F32(4), vEyeP=F32(4), vEyeL=F32(4), vEyeR=F32(4), vEyeK=F32(4), vEyeK2=F32(4), vQ=F32(4),
       vFrost=F32(4), vPoolK=F32(4), vFringeK=F32(4), vMisc=F32(4), vTouch=F32(4), vNT=F32(1), vWarp=F32(1), mBody=F32(4),
       mBlob=[F32(4),F32(4),F32(4)], vBlobC=[F32(2),F32(2),F32(2)];
 const LOG2E=Math.LOG2E, gk=w=>-LOG2E/(w*w);                 // gauss(x,w)=exp2(x²·gk(w))
@@ -817,8 +836,8 @@ function pushUniforms(){
   const hp=Math.max(0,Math.min(1,at(happy,a))), lift=.035*hp, arc=.15*hp;
   // shape A (current) and, while morphing, shape B — same size/lid springs drive both boxes
   const mt=Math.max(0,Math.min(1,at(shapeT,a)));
-  EV3[0]=at(size,a)*T.eyeScale; EV3[1]=at(lid,a); EV3[2]=SH.a; F.eyeShapeV(EYE,EV3);
-  if(mt>0){ EV3[2]=SH.b; F.eyeShapeV(EYEB,EV3); } else { EYEB.hw=EYE.hw; EYEB.hh=EYE.hh; EYEB.fade=EYE.fade; EYEB.ex=EYE.ex; }
+  EV3[0]=at(size,a)*T.eyeScale; EV3[1]=at(lid,a); EV3[2]=SH.a; EV3[3]=hp; F.eyeShapeV(EYE,EV3);
+  if(mt>0){ EV3[2]=SH.b; F.eyeShapeV(EYEB,EV3); } else { EYEB.hw=EYE.hw; EYEB.hh=EYE.hh; EYEB.fade=EYE.fade; EYEB.ex=EYE.ex; EYEB.oy=EYE.oy; EYEB.vtop=EYE.vtop; EYEB.ck=EYE.ck; }
   const ehw=EYE.hw+(EYEB.hw-EYE.hw)*mt, ehh=EYE.hh+(EYEB.hh-EYE.hh)*mt, efade=EYE.fade+(EYEB.fade-EYE.fade)*mt;
   // morph = lerp of the box and of the unified-SDF params (one SDF per tap in the shader)
   const SA=F.SHAPES[SH.a], SB=F.SHAPES[SH.b], lonR=SA.lon+(SB.lon-SA.lon)*mt;
@@ -826,7 +845,12 @@ function pushUniforms(){
   vEyeA[0]=Math.max(ehw,.004); vEyeA[1]=Math.max(ehh,.004); vEyeA[2]=1/vEyeA[0]; vEyeA[3]=1/vEyeA[1]; gl.uniform4fv(U.uEyeA,vEyeA);
   vShape[0]=SA.r+(SB.r-SA.r)*mt; vShape[1]=SA.e+(SB.e-SA.e)*mt; vShape[2]=SA.taper+(SB.taper-SA.taper)*mt; gl.uniform4fv(U.uShape,vShape);
   vShapeT[0]=Math.cos(tl); vShapeT[1]=Math.sin(tl); vShapeT[2]=SA.bend+(SB.bend-SA.bend)*mt; vShapeT[3]=lonR; gl.uniform4fv(U.uShapeT,vShapeT);
+  const eoy=EYE.oy+(EYEB.oy-EYE.oy)*mt;
+  vShapeC[0]=eoy; vShapeC[1]=EYE.vtop+(EYEB.vtop-EYE.vtop)*mt; vShapeC[2]=EYE.ck+(EYEB.ck-EYE.ck)*mt; gl.uniform4fv(U.uShapeC,vShapeC);
   const w=.8*T.eyeSoft+.4, ihw=1/Math.max(ehw,1e-4);
+  // drop shadow: offset ≈7% and Gaussian width ≈10% of the eye width (reaches < offset+2σ ≈ 0.27·hw·RR,
+  // well inside the capsule margin mg below, so it costs nothing outside the eyes' region)
+  vShadow[0]=T.eyeShadow; vShadow[1]=.14*ehw; vShadow[2]=gk(Math.max(.2*ehw*RR,.5)); gl.uniform4fv(U.uShadow,vShadow);
   /* tight bounding capsule per eye: the projected stadium axis (cap ends) + radius. Projection never
      enlarges distances (screen ≤ RR·angle), the meridian's bow is < 1u, the happy arc droops ≤ arc·hw,
      and the margin is where glow + aura fall under ~0.5/255 (ds ≥ 0.8·screen distance near the limb). */
@@ -836,7 +860,7 @@ function pushUniforms(){
   vEyeP[2]=efade; vEyeP[3]=(crad+arc*crad)*RR+1+mg; gl.uniform4fv(U.uEyeP,vEyeP);
   PJ[0]=cy; PJ[1]=sy; PJ[2]=cp; PJ[3]=sp; PJ[4]=cr; PJ[5]=sr;
   for(let s2=-1;s2<=1;s2+=2){
-    PJ[6]=s2*lonR; PJ[7]=lat0+ccap; F.projectV(PA,PJ); PJ[7]=lat0-ccap; F.projectV(PB,PJ);
+    PJ[6]=s2*lonR; PJ[7]=lat0+eoy+ccap; F.projectV(PA,PJ); PJ[7]=lat0+eoy-ccap; F.projectV(PB,PJ);
     const v=s2<0?vEyeL:vEyeR; v[0]=PA.x; v[1]=PA.y; v[2]=PB.x; v[3]=PB.y; gl.uniform4fv(s2<0?U.uEyeL:U.uEyeR,v);
   }
   vEyeK[0]=w; vEyeK[1]=gk(4+3*w); vEyeK[2]=gk(3.5+2.5*w); vEyeK[3]=ihw; gl.uniform4fv(U.uEyeK,vEyeK);

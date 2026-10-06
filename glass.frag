@@ -39,6 +39,8 @@ uniform vec4  uEyeP;    // eyes: -, -, lidFade (morph-blended), capsule radius (
 uniform vec4  uEyeA;    // eye box (radians): half width, half visible height (morph-blended), 1/hw, 1/hh
 uniform vec4  uShape;   // eye shape params: corner radius ×hw, ellipse weight, egg taper, -
 uniform vec4  uShapeT;  // eye shape params: cos lean, sin lean, bean bow ×hw, rest lon of the eyes (±)
+uniform vec4  uShadow;  // eye drop shadow: strength, lat offset down (rad), gauss k (exp2), -
+uniform vec4  uShapeC;  // eye lid (radians): egg-centre offset, lid line (rel. to centre), corner k, -
 uniform vec4  uEyeL, uEyeR; // eyes: tight bounding capsules = projected stadium axis ends (a.xy, b.xy), screen units
 uniform vec4  uEyeK;    // eyes: soft edge w, glow k, aura k (exp2 factors), 1/hw
 uniform vec4  uEyeK2;   // eyes: 1/(2·hh), rim-shade edge (−0.7·hw·RR), lat centre (shape rest lat + lift), arc/hw (morph-blended box)
@@ -73,7 +75,10 @@ vec3 tint(vec3 col, vec3 c, float a){
 // squircle r = .55hw, dot = round box, oval = ellipse, egg = tapered ellipse, bean = leaning bowed ellipse,
 // ref = plump (mostly ellipse) egg leaning outward, placed low and wide (rest lon/lat per shape).
 // A shape switch lerps the params on the CPU → no branches, one evaluation per tap, even mid-morph.
+// smooth max: rounds the corner where the lid line meets the shape by ~k
+float smax(float a, float c, float k){ float h = max(k - abs(a - c), 0.0) / k; return max(a, c) + h * h * k * 0.25; }
 float eyeSDF(vec2 p, vec2 b, float side){
+  p.y -= uShapeC.x;                                                       // squint: centre drops ('ref')
   vec2 ib = uEyeA.zw;                                                     // 1/b (CPU)
   vec2 q = vec2(uShapeT.x * p.x + side * uShapeT.y * p.y, -side * uShapeT.y * p.x + uShapeT.x * p.y);  // lean
   float yn = clamp(q.y * ib.y, -1.0, 1.0);
@@ -84,7 +89,8 @@ float eyeSDF(vec2 p, vec2 b, float side){
   vec2 e0 = q * ib, e1 = e0 * ib;                                         // ellipse (gradient-normalised
   float k0 = length(e0);                                                  //  approx, exact on the edge)
   float dE = k0 * (k0 - 1.0) * inversesqrt(max(dot(e1, e1), 1e-8));
-  return mix(dR, dE, uShape.y) * g;
+  float d = mix(dR, dE, uShape.y) * g;
+  return smax(d, p.y - uShapeC.y, uShapeC.z);                             // lid from the top ('ref'; parked above otherwise)
 }
 
 // eye shading for one chroma tap, given its sphere coordinates (lon, lat) and visible-hemisphere Z
@@ -109,6 +115,17 @@ vec3 eyeTap(vec3 col, float lon, float lat, float Z){
   ec = mix(ec, uEyeLo, 0.4 * rimShade);
   float fill = 1.0 - smoothstep(-w, w, ds);
   return mix(col, ec, fill * vis);
+}
+// soft offset drop shadow (ambient occlusion on the pool): the eye SDF sampled a little lower, Gaussian
+// falloff, multiplied toward the deep pool colour → a darker, bluer band hugging the eye's lower edges.
+// Once per pixel (centre tap, before the fill), only inside the eye capsules; follows gaze, lid and fade.
+vec3 eyeShadow(vec3 col, float lon, float lat, float Z){
+  float side = lon < 0.0 ? -1.0 : 1.0;
+  float u = lon - uShapeT.w * side;
+  float v = lat - uEyeK2.z + uEyeK2.w * u * u + uShadow.y;
+  float ds = eyeSDF(vec2(u, v), uEyeA.xy, side) * RR * (0.5 * Z + 0.5);
+  float sh = uShadow.x * uEyeP.z * smoothstep(0.02, 0.08, Z) * g2(max(ds, 0.0), uShadow.z);
+  return col * mix(vec3(1.0), uDeep * 0.85, sh);
 }
 // squared distance from p to segment ab (capsule test without a sqrt)
 float seg2(vec2 p, vec4 ab){ vec2 pa = p - ab.xy, ba = ab.zw - ab.xy;
@@ -138,6 +155,7 @@ vec3 eyes(vec3 col, vec2 p, vec2 off){
   // Δs for the screen offset o: (cr·o.x − sr·o.y, −sr·o.x − cr·o.y)/RR
   vec2 ds_ = vec2(uFace.x*off.x - uFace.y*off.y, -uFace.y*off.x - uFace.x*off.y) * (1.0 / RR);
   vec3 dl = vec3(dot(gLon, ds_), dot(gLat, ds_), dot(gZ, ds_));
+  col = eyeShadow(col, lon, lat, Z);
   return vec3(eyeTap(col, lon + dl.x, lat + dl.y, Z + dl.z).r,
               eyeTap(col, lon, lat, Z).g,
               eyeTap(col, lon - dl.x, lat - dl.y, Z - dl.z).b);

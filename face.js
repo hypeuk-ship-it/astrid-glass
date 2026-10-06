@@ -58,27 +58,42 @@
      lean inward; < 0 leans outward), bend (×hw, bean bow). Placement: lon, lat = rest eye centre on the
      sphere (gaze still adds the head turn). Lid: amin = flattest allowed aspect (1 = may round off to a
      circle; ≥ h/w = keep its own aspect, as 'ref' does), sq = how much a squint/blink shrinks it instead of squashing.
+     top = 1: blink/lid come down from the top like a real lid (corner rounding ck×hw) and a happy squint shrinks
+     the eye toward its bottom, so it never gets flatter than its own aspect except under the lid.
      A morph lerps all of these, so the shader runs ONE SDF per tap and the eyes glide to the new spot. */
   const SHAPES=Object.freeze([
-    Object.freeze({name:'stadium', w:.23, h:.52, ex:1,    r:1,   e:0, taper:0,   tilt:0,    bend:0, lon:.2, lat:.04, amin:1, sq:.15}),   // default pill
-    Object.freeze({name:'egg',     w:.24, h:.33, ex:1.2,  r:1,   e:1, taper:.17, tilt:0,    bend:0, lon:.2, lat:.04, amin:1, sq:.15}),   // pebble, wider at the bottom
-    Object.freeze({name:'dot',     w:.24, h:.24, ex:1,    r:1,   e:0, taper:0,   tilt:0,    bend:0, lon:.2, lat:.04, amin:1, sq:.15}),   // plain circle
-    Object.freeze({name:'oval',    w:.22, h:.42, ex:1,    r:1,   e:1, taper:0,   tilt:0,    bend:0, lon:.2, lat:.04, amin:1, sq:.15}),   // smooth tall ellipse
-    Object.freeze({name:'bean',    w:.2,  h:.4,  ex:1.45, r:1,   e:1, taper:0,   tilt:.244, bend:.35, lon:.2, lat:.04, amin:1, sq:.15}), // leaning kidney bean
-    Object.freeze({name:'squircle',w:.225,h:.245,ex:1.3,  r:.55, e:0, taper:0,   tilt:0,    bend:0, lon:.2, lat:.04, amin:1, sq:.15}), // soft rounded square
-    // Reference (Henlo's image): big plump eggs (ellipse ⅔ + stadium ⅓, slight bottom taper), tops leaning
-    // ~22° OUTWARD on screen (measured −31°/+11° on a turned view; sphere curvature adds most of it, so the
-    // authored tilt is small), aspect ~1.4, set low and fairly close (gap ≈ half an eye width).
-    Object.freeze({name:'ref',     w:.4, h:.5, ex:1.2,  r:1,   e:.7, taper:.10, tilt:-.2, bend:0, lon:.36, lat:0, amin:99, sq:.25})]);
+    Object.freeze({name:'stadium', w:.23, h:.52, ex:1,    r:1,   e:0, taper:0,   tilt:0,    bend:0, lon:.2, lat:.04, amin:1, sq:.15, top:0, ck:0}),   // default pill
+    Object.freeze({name:'egg',     w:.24, h:.33, ex:1.2,  r:1,   e:1, taper:.17, tilt:0,    bend:0, lon:.2, lat:.04, amin:1, sq:.15, top:0, ck:0}),   // pebble, wider at the bottom
+    Object.freeze({name:'dot',     w:.24, h:.24, ex:1,    r:1,   e:0, taper:0,   tilt:0,    bend:0, lon:.2, lat:.04, amin:1, sq:.15, top:0, ck:0}),   // plain circle
+    Object.freeze({name:'oval',    w:.22, h:.42, ex:1,    r:1,   e:1, taper:0,   tilt:0,    bend:0, lon:.2, lat:.04, amin:1, sq:.15, top:0, ck:0}),   // smooth tall ellipse
+    Object.freeze({name:'bean',    w:.2,  h:.4,  ex:1.45, r:1,   e:1, taper:0,   tilt:.244, bend:.35, lon:.2, lat:.04, amin:1, sq:.15, top:0, ck:0}), // leaning kidney bean
+    Object.freeze({name:'squircle',w:.225,h:.245,ex:1.3,  r:.55, e:0, taper:0,   tilt:0,    bend:0, lon:.2, lat:.04, amin:1, sq:.15, top:0, ck:0}), // soft rounded square
+    // Reference (Henlo's image): a full, closed, plump EGG, narrow rounded end UP, fullest low (~60% down the egg, ~2/3 down the part the image shows),
+    // soft and round all round, gentle outward lean (a symmetric average of the two eyes in the image, whose flat
+    // bottoms are only the dome edge cropping them), large, close (gap ≈ half an eye width), centred on the orb.
+    Object.freeze({name:'ref',     w:.44, h:.5, ex:1.25, r:1,   e:1, taper:.22, tilt:-.3, bend:0, lon:.44, lat:0, amin:99, sq:.22, top:1, ck:.3})]);
   const LID0=REST.w/REST.h;               // lid at which the stadium reaches a circle (fade starts below it)
   /* Box for any shape. Lid/blink close it vertically: hh goes from the natural height to round (hh = hw)
      as lid goes 1 → LID0, then the eye fades (lidFade). For the stadium this is EXACTLY stadiumOf + lidFade
      (h·lid is linear and hits w at LID0). Shapes with little height to give (dot, squircle) shrink up to
      15% instead of squashing, so a happy squint still reads and nothing gets flatter than round.
-     'ref' (amin = its own aspect) never flattens at all: lid and squint shrink it up to 25% instead.
-     v = [size, lid, shapeIndex]; writes o.hw, o.hh, o.cap (= hh − hw, the stadium cap), o.fade, o.ex. */
+     'ref' (top = 1) never flattens: a real lid comes down from the top and a squint shrinks it (branch below).
+     Writes o.hw, o.hh, o.cap (= hh − hw, the stadium cap), o.fade, o.ex. */
+  /* v = [size, lid, shapeIndex, happy]. Also writes the lid frame used by the shader (radians, eye-local):
+     o.oy = egg-centre offset (a 'top' shape's squint shrinks toward its bottom, so the centre drops), o.vtop =
+     lid line relative to the egg centre (parked 1.5·hh above for the others = no effect), o.ck lid corner. */
   function eyeShapeV(o,v){
     const S=SHAPES[v[2]|0]||SHAPES[0], s=Math.max(0,v[0]), l=Math.max(0,v[1]);
+    if(S.top){                                                         // real-lid shapes ('ref')
+      const hp=clamp(v[3]||0,0,1), sc=1-S.sq*hp;                      // happy squint: shrink toward the bottom
+      const hwN=S.w*s/2, hhN=S.h*s/2;
+      o.hw=hwN*sc; o.hh=hhN*sc; o.cap=Math.max(0,o.hh-o.hw); o.ex=S.ex;
+      o.oy=-hhN*(1-sc);                                                // the bottom stays where it was
+      const lb=clamp(l/Math.max(.2,1-.5*hp),0,1);                      // the lid with the squint factored out
+      o.vtop=o.hh*(2.25*lb-1);                                         // lid line: 1.25·hh above (open) → bottom
+      o.ck=Math.max(1e-3,S.ck*o.hw); o.fade=s<=0?0:clamp(lb*5,0,1);
+      return o;
+    }
     let w=S.w*s; const h=S.h*s; if(h<w) w=h;
     const k=Math.min(1,Math.max(0,(l-LID0)/(1-LID0)));                 // 1 open … 0 flattest allowed
     const am=Math.min(h/Math.max(w,1e-9),S.amin), hmin=w*am;             // never flatter than amin
@@ -86,6 +101,7 @@
     const shrink=1-S.sq*(1-k)*room;
     o.hw=w/2*shrink; o.hh=(hmin+(h-hmin)*k)/2*shrink; o.cap=Math.max(0,o.hh-o.hw);
     o.fade=w<=0?0:(l>=LID0?1:Math.max(0,l/LID0)); o.ex=S.ex;
+    o.oy=0; o.vtop=1.5*o.hh; o.ck=1e-3;                               // no lid line (parked well above)
     return o;
   }
   const len=(x,y)=>Math.sqrt(x*x+y*y), clamp=(x,a,b)=>Math.min(b,Math.max(a,x));
@@ -106,13 +122,19 @@
     return sdEllipse(x-side*.35*hw*(1-yn*yn),y,hw,hh);
   }
   // 5 squircle: rounded box, corner radius 0.55·hw
-  // 6 ref: plump egg, a bit wider at the bottom; placed low and wide (lon .45, lat −.5) so on the sphere
-  //   its top leans outward (left eye's top to the left) like Henlo's reference — params in SHAPES.ref
-  function sdRef(u,v,hw,hh,side){
-    const P=SHAPES[6], c=Math.cos(P.tilt), s=Math.sin(P.tilt);       // small; the outward lean on screen comes from the sphere
+  // smooth max (polynomial): rounds the corner where the lid meets the shape by ~k
+  function smax(a,b,k){ const h=Math.max(k-Math.abs(a-b),0)/k; return Math.max(a,b)+h*h*k*.25; }
+  /* 6 ref (Henlo's reference): a closed plump EGG, narrow end up (taper → fullest low down), mostly ellipse,
+     leaned outward per side; a blink/lid comes down from the top (smooth-max'd lid line). C = the eyeShapeV box
+     {oy, vtop, ck} (omit it for the open rest shape). Same as eyeSDFP(…, SHAPES.ref, C). */
+  function sdRef(u,v,hw,hh,side,C){
+    const P=SHAPES[6]; C=C||{oy:0,vtop:1.5*hh,ck:P.ck*hw};
+    v-=C.oy;
+    const c=Math.cos(P.tilt), s=Math.sin(P.tilt);
     const x0=c*u+side*s*v, y=-side*s*u+c*v, yn=clamp(y/hh,-1,1), g=1-P.taper*yn, x=x0/g;
     const cap=Math.max(0,hh-hw), dS=len(x,y-clamp(y,-cap,cap))-hw;   // stadium (rounded box, r = hw)
-    return (dS+(sdEllipse(x,y,hw,hh)-dS)*P.e)*g;                       // plump: mostly ellipse
+    const egg=(dS+(sdEllipse(x,y,hw,hh)-dS)*P.e)*g;                   // narrow-end-up egg
+    return smax(egg,v-C.vtop,C.ck);                                    // lid from the top
   }
   function sdSquircle(u,v,hw,hh){ const r=.55*hw, qx=Math.abs(u)-hw+r, qy=Math.abs(v)-hh+r;
     return len(Math.max(qx,0),Math.max(qy,0))+Math.min(Math.max(qx,qy),0)-r; }
@@ -120,14 +142,16 @@
   function eyeSDF(id,u,v,hw,hh,side){ return (SDF[id|0]||sdStadium)(u,v,hw,hh,side); }
   /* The one the shader runs: every shape above is this function at its SHAPES params (checked in tests):
      lean + bow (bean) → taper (egg) → mix(rounded box with corner r·hw, ellipse, e). */
-  function eyeSDFP(u,v,hw,hh,side,P){
+  function eyeSDFP(u,v,hw,hh,side,P,C){
+    if(C) v-=C.oy;
     const c=Math.cos(P.tilt), s=Math.sin(P.tilt);
     let x=c*u+side*s*v; const y=-side*s*u+c*v, yn=clamp(y/hh,-1,1);
     x-=side*P.bend*hw*(1-yn*yn);
     const g=1-P.taper*yn; x/=g;
     const r=P.r*hw, qx=Math.abs(x)-hw+r, qy=Math.abs(y)-hh+r;
     const dR=len(Math.max(qx,0),Math.max(qy,0))+Math.min(Math.max(qx,qy),0)-r;
-    return (dR+(sdEllipse(x,y,hw,hh)-dR)*P.e)*g;
+    const d=(dR+(sdEllipse(x,y,hw,hh)-dR)*P.e)*g;
+    return C?smax(d,v-C.vtop,C.ck):d;
   }
   window.AstridFace=Object.freeze({SHAPES,eyeShapeV,eyeSDF,eyeSDFP,sdStadium,sdEgg,sdDot,sdOval,sdBean,sdSquircle,sdRef,CX,CY,RR,REST,projector,projectInto,projectV,stadiumOf,lidFade,eyePts,eyeUniforms,eyeInto,eyeV});
 })();
