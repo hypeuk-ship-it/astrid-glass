@@ -287,7 +287,7 @@ const store={get(k){try{return localStorage.getItem(k)}catch(e){return null}},
 /* ---------------- tuning (debug sliders) ---------------- */
 const TUNE_KEY='astridTuneVibe';
 const TUNE_DEF={lag:110,gk:.022,gd:.72,follow:.8,dSpeed:1,dAmt:1,edge:1,haze:1,poolH:1,poolI:1,fringe:1,split:1,eyeScale:1.3,eyeSoft:1,
-  cBuild:1,cDecay:1,tickle:900,dent:1,pull:1,vol:1};
+  cBuild:1,cDecay:1,tickle:900,dent:1,pull:1,vol:1,bDepth:1,bRate:1,bCalm:1};
 const SLIDERS=[
   ['lag','glass lag (ms)',0,400,5],
   ['gk','glass spring k',.004,.12,.001],
@@ -309,6 +309,9 @@ const SLIDERS=[
   ['dent','dent strength',0,3,.05],
   ['pull','pull strength',0,3,.05],
   ['vol','voice volume',0,2,.05],
+  ['bDepth','breath depth',0,3,.05],
+  ['bRate','breath rate',.3,3,.05],
+  ['bCalm','content calming',0,2,.05],
 ];
 function loadTune(){            // only known keys, finite, clamped to the slider range
   const t=Object.assign({},TUNE_DEF); let s=null;
@@ -579,6 +582,49 @@ stage.addEventListener('lostpointercapture',petEnd);
 stage.addEventListener('click',()=>{ if(suppressClick){suppressClick=false;return;} tap(); });   // AT / synthetic clicks
 stage.addEventListener('contextmenu',e=>{ if(pet.down) e.preventDefault(); });
 
+/* ================= breathing (glass only: pool, deep floor, bloom — never the eyes, lids or pose) =================
+   Not a wave: a breath cycle of eased segments (inhale → exhale → short pause at the bottom), every breath
+   with its own random period (3.5–5.5 s) and depth (0.6–1.0); the inhale takes ~42% of the active time, so it
+   is a little quicker than the exhale. A spring chases that target (organic, no corners) and the bloom
+   follows on a softer spring a beat later. Content (petting) → slower, slightly deeper breaths; a tickle →
+   a couple of quick shallow breaths, then it settles; reduced motion → half depth. All on the CPU. */
+const breath=spring(0,.12,.7), breathL=spring(0,.05,.78);
+ALL.push(breath,breathL);
+const BR={seg:2,t0:0,dur:.5,from:0,to:0,tIn:1,tOut:1,tPause:.5,depth:.5,quick:0,inQuick:false};
+BR.dur=200+Math.random()*900;                                     // start somewhere in a pause
+const qBreath=Q.has('breath')?Math.max(0,Math.min(1.2,+Q.get('breath')||0)):null;   // test hook: pin the breath
+const ease=u=>u*u*(3-2*u);                                        // eased segment (smoothstep), not a sine
+function breathPlan(){                                            // a new breath: period, depth, pause
+  const c=Math.max(0,Math.min(1,happy.x))*T.bCalm;
+  let period,pause,depth;
+  if(BR.quick>0){ BR.quick--; BR.inQuick=true; period=850+Math.random()*350; pause=0; depth=.35+Math.random()*.15; }
+  else { BR.inQuick=false; period=(3500+Math.random()*2000)*(1+.4*c); pause=(250+Math.random()*350)*(1+.6*c); depth=(.6+Math.random()*.4)*(1+.2*c); }
+  const rate=Math.max(.3,T.bRate), act=Math.max(300,period-pause)/rate;
+  BR.tIn=.42*act; BR.tOut=.58*act; BR.tPause=pause/rate; BR.depth=depth*(RM?.5:1);
+}
+function breathSeg(seg){
+  BR.seg=seg; BR.t0=CK.simT; BR.from=breath.t;
+  if(seg===0){ breathPlan(); BR.dur=BR.tIn; BR.to=BR.depth; }
+  else if(seg===1){ BR.dur=BR.tOut; BR.to=0; }
+  else { BR.dur=BR.tPause; BR.to=0; }
+}
+function breathTick(){
+  if(qBreath!==null){ snap(breath,qBreath); snap(breathL,qBreath); return; }
+  if(still){ snap(breath,0); snap(breathL,0); return; }
+  let n=0;
+  while(CK.simT-BR.t0>=BR.dur&&n++<3) breathSeg(BR.seg===0?1:BR.seg===1?(BR.tPause>0?2:0):0);
+  const u=Math.min(1,(CK.simT-BR.t0)/Math.max(1,BR.dur));
+  breath.t=BR.from+(BR.to-BR.from)*ease(u);
+  step(breath); breathL.t=breath.x; step(breathL);
+}
+function breathQuick(fresh){                                      // tickle: a couple of quick short breaths
+  BR.quick=fresh?2:Math.max(BR.quick,1);
+  if(fresh&&!BR.inQuick){                                         // interrupt: quick exhale from where it is, then the quick breaths
+    BR.inQuick=true; BR.tPause=0; BR.seg=1; BR.t0=CK.simT; BR.from=breath.t; BR.to=0;
+    BR.dur=(250+350*Math.min(1,breath.t))/Math.max(.3,T.bRate);
+  }
+}
+
 function tickle(){
   const fresh=CK.simT-pet.lastTickle>1200;                          // first tickle of a scrub gets the full burst
   pet.lastTickle=CK.simT; pet.content=Math.min(1,pet.content+.06);
@@ -586,6 +632,7 @@ function tickle(){
   [0,85,170].forEach((t,i)=>kickQ.push({t:CK.simT+t,s:(i%2?-sg:sg)*(i===2?.6:1)}));   // quick wiggle
   (fresh?[0,160,320]:[0]).forEach(t=>blinkQ.push(CK.simT+t));                            // blink burst (short blinks)
   bodyA.v+=.02;
+  breathQuick(fresh);
   Voice.giggle();
 }
 function petTick(dt){
@@ -643,6 +690,7 @@ function tick(){            // one fixed 60 Hz step of the whole motion model
     if(doubleAt>0&&CK.simT>=doubleAt){ blink(); doubleAt=-1; }
   }
   petTick(dt);
+  breathTick();
   // happy eyes: lid comes down with content → the stadium shortens toward (never past) a circle
   lid.t=CK.simT<blinkUntil?0:1-.5*Math.max(0,Math.min(1,happy.x));
   step(yaw);step(pitch);step(size);step(lid);
@@ -709,10 +757,12 @@ function pushUniforms(){
   const ox=-gsy*k+at(dragX,a), oy=-gsp*Math.cos(gy)*k+at(dragY,a), isx=1/(1-.16*Math.abs(gsy)), isy=1/(1-.16*Math.abs(gsp));
   vQ[0]=isx; vQ[1]=isy; vQ[2]=120-(120+ox)*isx; vQ[3]=120-(120+oy)*isy; gl.uniform4fv(U.uQ,vQ);
   // blobs: drift⁻¹ (rotate·scale about the drift origin + translate) with 1/radii folded in
-  const ph=T.poolH;
+  // breathing: blobs scale about their own centres (pool also rises a touch); bloom on its lagging spring
+  const bA=.055*T.bDepth, bb=at(breath,a)*bA, bl=at(breathL,a)*bA;
+  const ph=T.poolH*(1+.35*bb);
   for(let i=0;i<3;i++){
     const d=drifts[i], ang=at(d.r,a)*Math.PI/180, c=Math.cos(ang), s=Math.sin(ang), ix=1/at(d.sx,a), iy=1/at(d.sy,a);
-    const otx=120+at(d.x,a)*BOX, oty=144.8+at(d.y,a)*BOX, rx=1/BLOB_RX[i], ry=1/blobR(i,ph);
+    const otx=120+at(d.x,a)*BOX, oty=144.8+at(d.y,a)*BOX, bs=1/(1+(i===2?1.2*bl:bb)), rx=bs/BLOB_RX[i], ry=bs/blobR(i,ph);
     const a0=c*ix, a1=-s*iy, a2=s*ix, a3=c*iy;                // column-major M⁻¹
     const m=mBlob[i], cv2=vBlobC[i];
     m[0]=a0*rx; m[1]=a1*ry; m[2]=a2*rx; m[3]=a3*ry;
@@ -726,7 +776,7 @@ function pushUniforms(){
   vFrost[0]=gk(10*es+3); vFrost[1]=118-6*es-1; vFrost[2]=118+5*es+1; vFrost[3]=Math.max(118-4+2.5*(10*es+3),118+12); gl.uniform4fv(U.uFrost,vFrost);
   vPoolK[0]=30*es; vPoolK[1]=14*es; vPoolK[2]=10*es; vPoolK[3]=6*es+2; gl.uniform4fv(U.uPoolK,vPoolK);
   vFringeK[0]=gk(5*es+2.5); vFringeK[1]=gk(4+3*es); vFringeK[2]=T.fringe; vFringeK[3]=T.haze; gl.uniform4fv(U.uFringeK,vFringeK);
-  vMisc[0]=T.poolI; vMisc[1]=T.split*(1-.3*coatDark); vMisc[2]=gk(34); vMisc[3]=T.dent; gl.uniform4fv(U.uMisc,vMisc);
+  vMisc[0]=T.poolI*(1+.9*bb); vMisc[1]=T.split*(1-.3*coatDark); vMisc[2]=gk(34); vMisc[3]=T.dent; gl.uniform4fv(U.uMisc,vMisc);
   // petting: contact (pressure sprung in/out) + squash/stretch along the stroke, inverse matrix
   vTouch[0]=at(tX,a); vTouch[1]=at(tY,a); vTouch[2]=Math.max(0,at(press,a)); gl.uniform4fv(U.uTouch,vTouch);
   const ba=at(bodyA,a), ux=pet.bx, uy=pet.by, sa=1/(1+ba), sb=1/Math.max(.5,1-.6*ba);   // stretch along, squash across
@@ -821,18 +871,24 @@ function bench(n){n=n||60;const was=!!raf;stop();(CK.alpha=0,pushUniforms());dra
   const px=new Uint8Array(4);for(let i=0;i<n;i++){tick();(CK.alpha=0,pushUniforms());draw();gl.readPixels(0,0,1,1,gl.RGBA,gl.UNSIGNED_BYTE,px);} const ms=(performance.now()-t0)/n; if(was)start(); return ms;}
 /* test hook: drive(steps) runs the real 60 Hz sim with scripted pointer input, one [down,x,y] (units) per
    tick, then draws once. Deterministic with ?seed. Used to compare frames pixel-for-pixel across builds. */
-function drive(steps){
-  stop(); const cl=v=>Math.max(-1,Math.min(1,v));
+function driveSteps(steps,rec){
+  const cl=v=>Math.max(-1,Math.min(1,v));
   for(let i=0;i<steps.length;i++){
     const dn=steps[i][0], x=steps[i][1], y=steps[i][2];
     if(dn&&!pet.down){ Object.assign(pet,{down:true,id:-2,x,y,px:x,py:y,lx:0,ly:0,path:0,downAt:CK.simT}); pet.revs.length=0; }
     else if(!dn&&pet.down) pet.down=false;
     if(dn){ pet.path+=Math.hypot(x-pet.x,y-pet.y); pet.x=x; pet.y=y; yaw.t=cl((x-120)/170)*.5; pitch.t=cl((y-120)/170)*.34; CK.pointerAt=CK.simT; }
     tick();
+    if(rec) rec.push([+breath.x.toFixed(4),+happy.x.toFixed(3),+size.x.toFixed(4),+lid.x.toFixed(4),+yaw.x.toFixed(4),+pitch.x.toFixed(4)]);
   }
+}
+function drive(steps){
+  stop(); driveSteps(steps,null);
   return new Promise(res=>requestAnimationFrame(()=>{ if(needResize) resize(); (CK.alpha=0,pushUniforms()); draw(); requestAnimationFrame(()=>res(CK.simT)); }));
 }
-window.__astrid={drive,pet:()=>({down:pet.down,content:pet.content,happy:happy.x,lid:lid.x,roll:roll.x,press:press.x,body:bodyA.x,revs:pet.revs.length,lastTickle:pet.lastTickle,simT:CK.simT,voice:Voice.stats()}),bench,get T(){return T},state:()=>state,pose:()=>({yaw:yaw.x,pitch:pitch.x,size:size.x,lid:lid.x,gYaw:gYaw.x,gPitch:gPitch.x}),fps:()=>fps,rscale:()=>rscale};
+/* test hook: trace(steps) runs the same scripted sim without drawing → per tick [breath, content, size, lid, yaw, pitch] */
+const trace=steps=>{stop(); const r=[]; driveSteps(steps,r); return JSON.stringify(r);};
+window.__astrid={drive,trace,pet:()=>({down:pet.down,content:pet.content,happy:happy.x,lid:lid.x,roll:roll.x,press:press.x,body:bodyA.x,breath:breath.x,revs:pet.revs.length,lastTickle:pet.lastTickle,simT:CK.simT,voice:Voice.stats()}),bench,get T(){return T},state:()=>state,pose:()=>({yaw:yaw.x,pitch:pitch.x,size:size.x,lid:lid.x,gYaw:gYaw.x,gPitch:gPitch.x}),fps:()=>fps,rscale:()=>rscale};
 })();
 </script>
 </body>
