@@ -95,6 +95,8 @@ uniform vec4  uEyeP;    // eyes: -, -, lidFade (morph-blended), capsule radius (
 uniform vec4  uEyeA;    // eye box (radians): half width, half visible height (morph-blended), 1/hw, 1/hh
 uniform vec4  uShape;   // eye shape params: corner radius ×hw, ellipse weight, egg taper, -
 uniform vec4  uShapeT;  // eye shape params: cos lean, sin lean, bean bow ×hw, rest lon of the eyes (±)
+uniform vec4  uAsym;    // toon shape: width scale ±(1 + side·x), height offset (side·y), top cut height, cut corner k
+uniform vec4  uCutN;    // slanted top cut normal: left eye (xy), right eye (zw)
 uniform vec4  uToon;    // toon layer: rim alpha (0 = off → skipped), pupil alpha (0 = off), rim grow (rad), -
 uniform vec4  uToonR;   // toon rim offset (rad): outward, up, -, -
 uniform vec4  uPupil;   // pupil centre (rad, eye-local): inward rest, gaze u, v, -
@@ -134,12 +136,14 @@ vec3 tint(vec3 col, vec3 c, float a){
 // ---- eye shapes: ONE parametric SDF in eye-local sphere coords (radians; < 0 inside), box b = (half w,
 // half h). Every shape is a parameter set (face.js SHAPES / eyeSDFP): stadium = rounded box with r = hw,
 // squircle r = .55hw, dot = round box, oval = ellipse, egg = tapered ellipse, bean = leaning bowed ellipse,
-// ref = plump (mostly ellipse) egg leaning outward, placed low and wide (rest lon/lat per shape).
+// ref = plump (mostly ellipse) egg leaning outward; toon = rounded ellipse with a soft slanted top cut + 3/4 asymmetry.
 // A shape switch lerps the params on the CPU → no branches, one evaluation per tap, even mid-morph.
 // smooth max: rounds the corner where the lid line meets the shape by ~k
 float smax(float a, float c, float k){ float h = max(k - abs(a - c), 0.0) / k; return max(a, c) + h * h * k * 0.25; }
 float eyeSDF(vec2 p, vec2 b, float side){
-  p.y -= uShapeC.x;                                                       // squint: centre drops ('ref')
+  float sx = 1.0 + side * uAsym.x;                                        // 3/4 asymmetry ('toon'; 0 otherwise):
+  p.y += side * uAsym.y; p.x /= sx;                                       //  per-eye width + height
+  p.y -= uShapeC.x;                                                       // squint: centre drops ('top' shapes)
   vec2 ib = uEyeA.zw;                                                     // 1/b (CPU)
   vec2 q = vec2(uShapeT.x * p.x + side * uShapeT.y * p.y, -side * uShapeT.y * p.x + uShapeT.x * p.y);  // lean
   float yn = clamp(q.y * ib.y, -1.0, 1.0);
@@ -151,7 +155,8 @@ float eyeSDF(vec2 p, vec2 b, float side){
   float k0 = length(e0);                                                  //  approx, exact on the edge)
   float dE = k0 * (k0 - 1.0) * inversesqrt(max(dot(e1, e1), 1e-8));
   float d = mix(dR, dE, uShape.y) * g;
-  return smax(d, p.y - uShapeC.y, uShapeC.z);                             // lid from the top ('ref'; parked above otherwise)
+  d = smax(d, dot(p, side < 0.0 ? uCutN.xy : uCutN.zw) - uAsym.z, uAsym.w);   // soft slanted top cut ('toon'; parked)
+  return smax(d, p.y - uShapeC.y, uShapeC.z) * min(sx, 1.0);              // lid from the top ('top' shapes; parked)
 }
 
 // eye shading for one chroma tap, given its sphere coordinates (lon, lat) and visible-hemisphere Z
@@ -180,10 +185,11 @@ vec3 eyeTap(vec3 col, float lon, float lat, float Z, float rimA){
   // Centre tap only (rimA ≥ 0 marks it): no RGB fringe on the pupil; applied after the three taps.
 #ifdef TOON
   if (uToon.y > 0.0 && rimA >= 0.0) {
-    vec2 pq = vec2(u + side * uPupil.x - uPupil.y, v - uPupil.z);
+    float psx = 1.0 + side * uAsym.x;                           // pupils follow the 3/4 asymmetry
+    vec2 pq = vec2(u / psx + side * uPupil.x - uPupil.y, v + side * uAsym.y - uPupil.z);
     vec2 p0 = pq * uPupilA.zw, p1 = p0 * uPupilA.zw;
     float pk = length(p0);
-    float dp = pk * (pk - 1.0) * inversesqrt(max(dot(p1, p1), 1e-8)) * RR * (0.5 * Z + 0.5);
+    float dp = pk * (pk - 1.0) * inversesqrt(max(dot(p1, p1), 1e-8)) * min(psx, 1.0) * RR * (0.5 * Z + 0.5);
     gPupil = uToon.y * vis * (1.0 - smoothstep(-w, w, max(dp, ds)));
   }
 #endif
@@ -358,9 +364,9 @@ void main(){
   gl_Position = vec4(aPos, 0.0, 1.0);
 }
 </script>
-<script src="coats.js?v=10062245"></script>
-<script src="springs.js?v=10062245"></script>
-<script src="face.js?v=10062245"></script>
+<script src="coats.js?v=10062320"></script>
+<script src="springs.js?v=10062320"></script>
+<script src="face.js?v=10062320"></script>
 <script>
 (function(){
 'use strict';
@@ -383,7 +389,7 @@ const store={get(k){try{return localStorage.getItem(k)}catch(e){return null}},
 const TUNE_KEY='astridTuneVibe';
 const TUNE_DEF={lag:110,gk:.022,gd:.72,follow:.8,dSpeed:1,dAmt:1,edge:1,haze:1,poolH:1,poolI:1,fringe:1,split:1,eyeScale:1.3,eyeSoft:1,
   cBuild:1,cDecay:1,tickle:900,dent:1,pull:1,vol:1,bDepth:1,bRate:1,bCalm:1,eyeShadow:.3,
-  tRim:1,tPupil:1,rimK:1,pupilK:1,pupilF:1};
+  tRim:1,tPupil:1,rimK:1,pupilK:1,pupilF:1,tasym:.5};
 const SLIDERS=[
   ['lag','glass lag (ms)',0,400,5],
   ['gk','glass spring k',.004,.12,.001],
@@ -403,6 +409,7 @@ const SLIDERS=[
   ['rimK','toon rim thickness',0,2.5,.05],
   ['pupilK','toon pupil size',.5,1.5,.01],
   ['pupilF','toon pupil follow',0,2,.05],
+  ['tasym','toon-shape asymmetry',0,1,.01],
   ['cBuild','content build',0,3,.05],
   ['cDecay','content decay',0,3,.05],
   ['tickle','tickle threshold (u/s)',400,2000,10],
@@ -430,7 +437,7 @@ const toFallback=why=>{console.warn('Astrid: '+why+', using the SVG fallback'); 
 const gl=cv.getContext('webgl',GL_OPTS)||cv.getContext('experimental-webgl',GL_OPTS);
 if(!gl){ toFallback('WebGL unavailable'); return; }
 const UNIFORMS=['uVS','uBodyM','uNT','uWarp','uPaper','uCore','uDeep','uMid','uEdge','uHalo','uEye','uEyeHi','uEyeLo','uGlow','uBloomCol','uLiftCol','uTouchCol','uAura','uMode',
-  'uRot','uEyeP','uEyeA','uShape','uShapeT','uShapeC','uShadow','uToon','uToonR','uPupil','uPupilA','uToonCol','uEyeL','uEyeR','uEyeK','uEyeK2','uFace','uQ','uBA','uBB','uBC','uCA','uCB','uCC','uFrost','uPoolK','uFringeK','uMisc','uTouch'];
+  'uRot','uEyeP','uEyeA','uShape','uShapeT','uShapeC','uAsym','uCutN','uShadow','uToon','uToonR','uPupil','uPupilA','uToonCol','uEyeL','uEyeR','uEyeK','uEyeK2','uFace','uQ','uBA','uBB','uBC','uCA','uCB','uCC','uFrost','uPoolK','uFringeK','uMisc','uTouch'];
 let U={}, lost=false; const GN=24, GCOUNT=GN*GN*6;
 const draw=()=>gl.drawElements(gl.TRIANGLES,GCOUNT,gl.UNSIGNED_SHORT,0);
 /* The program comes in two variants: plain, and with '#define TOON' (the toon eye layer). Only the variant in
@@ -733,8 +740,9 @@ const EYE_ICONS={
   oval:'<ellipse cx="5.6" cy="7" rx="2.5" ry="4.6"/><ellipse cx="14.4" cy="7" rx="2.5" ry="4.6"/>',
   bean:'<ellipse cx="5.4" cy="7" rx="2.4" ry="4.4" transform="rotate(14 5.4 7)"/><ellipse cx="14.6" cy="7" rx="2.4" ry="4.4" transform="rotate(-14 14.6 7)"/>',
   squircle:'<rect x="2.8" y="4" width="5.6" height="6" rx="2"/><rect x="11.6" y="4" width="5.6" height="6" rx="2"/>',
+  toon:'<path d="M2.9 3.1L8 4.3Q8.9 4.8 8.9 7.6Q8.7 11.8 5.8 11.8Q2.7 11.8 2.6 7.6Q2.5 3.6 2.9 3.1z"/><path d="M17.1 3.1L12 4.3Q11.1 4.8 11.1 7.6Q11.3 11.8 14.2 11.8Q17.3 11.8 17.4 7.6Q17.5 3.6 17.1 3.1z"/>',
   ref:'<ellipse cx="6" cy="7.6" rx="3.5" ry="4.7" transform="rotate(-20 6 7.6)"/><ellipse cx="14" cy="7.6" rx="3.5" ry="4.7" transform="rotate(20 14 7.6)"/>'};
-const EYE_LABEL={ref:'Reference'};
+const EYE_LABEL={ref:'Reference',toon:'Toon'};
 const eyeBar=$('eyes');
 SHAPE_NAMES.forEach(n=>{
   const b=document.createElement('button'); b.type='button'; b.dataset.e=n;
@@ -892,13 +900,13 @@ function tick(){            // one fixed 60 Hz step of the whole motion model
     if(CK.noiseT>=NT_WRAP){CK.noiseT-=NT_WRAP; CK.prevNT-=NT_WRAP;}   // seamless (periodic noise)
   }
 }
-const EYE={hw:.5,hh:.5,cap:.5,fade:.5,ex:.5,oy:.5,vtop:.5,ck:.5}, EYEB={hw:.5,hh:.5,cap:.5,fade:.5,ex:.5,oy:.5,vtop:.5,ck:.5}, EV3=new Float64Array(4), PA={x:.5,y:.5,z:.5}, PB={x:.5,y:.5,z:.5}, PJ=new Float64Array(8), EV=new Float64Array(2),
-      EYO={hw:.5,hh:.5,cap:.5,fade:.5,ex:.5,oy:.5,vtop:.5,ck:.5}, EYOB={hw:.5,hh:.5,cap:.5,fade:.5,ex:.5,oy:.5,vtop:.5,ck:.5},
+const EYE={hw:.5,hh:.5,cap:.5,fade:.5,ex:.5,oy:.5,vtop:.5,ck:.5,asx:.5,asy:.5,cut:.5,cutk:.5,nLx:.5,nLy:.5,nRx:.5,nRy:.5}, EYEB={hw:.5,hh:.5,cap:.5,fade:.5,ex:.5,oy:.5,vtop:.5,ck:.5,asx:.5,asy:.5,cut:.5,cutk:.5,nLx:.5,nLy:.5,nRx:.5,nRy:.5}, EV3=new Float64Array(5), PA={x:.5,y:.5,z:.5}, PB={x:.5,y:.5,z:.5}, PJ=new Float64Array(8), EV=new Float64Array(2),
+      EYO={hw:.5,hh:.5,cap:.5,fade:.5,ex:.5,oy:.5,vtop:.5,ck:.5,asx:.5,asy:.5,cut:.5,cutk:.5,nLx:.5,nLy:.5,nRx:.5,nRy:.5}, EYOB={hw:.5,hh:.5,cap:.5,fade:.5,ex:.5,oy:.5,vtop:.5,ck:.5,asx:.5,asy:.5,cut:.5,cutk:.5,nLx:.5,nLy:.5,nRx:.5,nRy:.5},
       TBOX={hw:.5,hh:.5,oy:.5}, TOPEN={hw:.5,hh:.5}, TK={rim:.5,pupil:.5,follow:.5}, TO={ox:.5,oy:.5,grow:.5,a:.5,b:.5,pin:.5,pu:.5,pv:.5};
 /* uniform staging: preallocated Float32Arrays + uniform*fv. Passing doubles straight to gl.uniform4f boxes
    each argument (a heap number per value per frame); writing into typed arrays doesn't allocate at all. */
 const F32=n=>new Float32Array(n);
-const vEyeA=F32(4), vShape=F32(4), vShapeT=F32(4), vShapeC=F32(4), vShadow=F32(4), vToon=F32(4), vToonR=F32(4), vPupil=F32(4), vPupilA=F32(4), vRot=F32(4), vFace=F32(4), vEyeP=F32(4), vEyeL=F32(4), vEyeR=F32(4), vEyeK=F32(4), vEyeK2=F32(4), vQ=F32(4),
+const vEyeA=F32(4), vShape=F32(4), vShapeT=F32(4), vShapeC=F32(4), vAsym=F32(4), vCutN=F32(4), vShadow=F32(4), vToon=F32(4), vToonR=F32(4), vPupil=F32(4), vPupilA=F32(4), vRot=F32(4), vFace=F32(4), vEyeP=F32(4), vEyeL=F32(4), vEyeR=F32(4), vEyeK=F32(4), vEyeK2=F32(4), vQ=F32(4),
       vFrost=F32(4), vPoolK=F32(4), vFringeK=F32(4), vMisc=F32(4), vTouch=F32(4), vNT=F32(1), vWarp=F32(1), mBody=F32(4),
       mBlob=[F32(4),F32(4),F32(4)], vBlobC=[F32(2),F32(2),F32(2)];
 const LOG2E=Math.LOG2E, gk=w=>-LOG2E/(w*w);                 // gauss(x,w)=exp2(x²·gk(w))
@@ -925,8 +933,9 @@ function pushUniforms(){
   const hp=Math.max(0,Math.min(1,at(happy,a))), lift=.035*hp, arc=.15*hp;
   // shape A (current) and, while morphing, shape B — same size/lid springs drive both boxes
   const mt=Math.max(0,Math.min(1,at(shapeT,a)));
-  EV3[0]=at(size,a)*T.eyeScale; EV3[1]=at(lid,a); EV3[2]=SH.a; EV3[3]=hp; F.eyeShapeV(EYE,EV3);
-  if(mt>0){ EV3[2]=SH.b; F.eyeShapeV(EYEB,EV3); } else { EYEB.hw=EYE.hw; EYEB.hh=EYE.hh; EYEB.fade=EYE.fade; EYEB.ex=EYE.ex; EYEB.oy=EYE.oy; EYEB.vtop=EYE.vtop; EYEB.ck=EYE.ck; }
+  EV3[0]=at(size,a)*T.eyeScale; EV3[1]=at(lid,a); EV3[2]=SH.a; EV3[3]=hp; EV3[4]=T.tasym; F.eyeShapeV(EYE,EV3);
+  if(mt>0){ EV3[2]=SH.b; F.eyeShapeV(EYEB,EV3); } else { EYEB.hw=EYE.hw; EYEB.hh=EYE.hh; EYEB.fade=EYE.fade; EYEB.ex=EYE.ex; EYEB.oy=EYE.oy; EYEB.vtop=EYE.vtop; EYEB.ck=EYE.ck;
+    EYEB.asx=EYE.asx; EYEB.asy=EYE.asy; EYEB.cut=EYE.cut; EYEB.cutk=EYE.cutk; EYEB.nLx=EYE.nLx; EYEB.nLy=EYE.nLy; EYEB.nRx=EYE.nRx; EYEB.nRy=EYE.nRy; }
   const ehw=EYE.hw+(EYEB.hw-EYE.hw)*mt, ehh=EYE.hh+(EYEB.hh-EYE.hh)*mt, efade=EYE.fade+(EYEB.fade-EYE.fade)*mt;
   // morph = lerp of the box and of the unified-SDF params (one SDF per tap in the shader)
   const SA=F.SHAPES[SH.a], SB=F.SHAPES[SH.b], lonR=SA.lon+(SB.lon-SA.lon)*mt;
@@ -936,6 +945,10 @@ function pushUniforms(){
   vShapeT[0]=Math.cos(tl); vShapeT[1]=Math.sin(tl); vShapeT[2]=SA.bend+(SB.bend-SA.bend)*mt; vShapeT[3]=lonR; gl.uniform4fv(U.uShapeT,vShapeT);
   const eoy=EYE.oy+(EYEB.oy-EYE.oy)*mt;
   vShapeC[0]=eoy; vShapeC[1]=EYE.vtop+(EYEB.vtop-EYE.vtop)*mt; vShapeC[2]=EYE.ck+(EYEB.ck-EYE.ck)*mt; gl.uniform4fv(U.uShapeC,vShapeC);
+  vAsym[0]=EYE.asx+(EYEB.asx-EYE.asx)*mt; vAsym[1]=EYE.asy+(EYEB.asy-EYE.asy)*mt;               // 'toon' asymmetry
+  vAsym[2]=EYE.cut+(EYEB.cut-EYE.cut)*mt; vAsym[3]=EYE.cutk+(EYEB.cutk-EYE.cutk)*mt; gl.uniform4fv(U.uAsym,vAsym);
+  vCutN[0]=EYE.nLx+(EYEB.nLx-EYE.nLx)*mt; vCutN[1]=EYE.nLy+(EYEB.nLy-EYE.nLy)*mt;               // slanted top cut
+  vCutN[2]=EYE.nRx+(EYEB.nRx-EYE.nRx)*mt; vCutN[3]=EYE.nRy+(EYEB.nRy-EYE.nRy)*mt; gl.uniform4fv(U.uCutN,vCutN);
   const w=.8*T.eyeSoft+.4, ihw=1/Math.max(ehw,1e-4);
   // drop shadow: offset ≈7% and Gaussian width ≈10% of the eye width (reaches < offset+2σ ≈ 0.27·hw·RR,
   // well inside the capsule margin mg below, so it costs nothing outside the eyes' region)
@@ -958,7 +971,9 @@ function pushUniforms(){
      and the margin is where glow + aura fall under ~0.5/255 (ds ≥ 0.8·screen distance near the limb). */
   const lat0=SA.lat+(SB.lat-SA.lat)*mt+lift, mg=(1.5+2.4*(3.5+2.5*w))/.8;
   // capsule for any shape (and both during a morph): radius = widest half-width × the shape's ex
-  const crad=Math.max(EYE.hw*EYE.ex,EYEB.hw*EYEB.ex), ccap=Math.max(0,Math.max(EYE.hh,EYEB.hh)-crad);
+  // asymmetry ('toon'): one eye up to (1+asx) wider and offset ±asy → widen the radius, lengthen the axis
+  const asx=Math.max(Math.abs(EYE.asx),Math.abs(EYEB.asx)), asy=Math.max(Math.abs(EYE.asy),Math.abs(EYEB.asy));
+  const crad=Math.max(EYE.hw*EYE.ex,EYEB.hw*EYEB.ex)*(1+asx), ccap=Math.max(0,Math.max(EYE.hh,EYEB.hh)-crad)+asy;
   vEyeP[2]=efade; vEyeP[3]=(crad+arc*crad)*RR+1+mg;
   if(tr>0){ const reach=(Math.hypot(TO.ox,TO.oy)+TO.grow)*RR+2;   // toon rim pokes out ≤ ~.33·hw·rimK: grow the capsule if needed
     if(reach>mg) vEyeP[3]+=reach-mg; }

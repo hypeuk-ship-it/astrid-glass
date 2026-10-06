@@ -58,20 +58,27 @@
      lean inward; < 0 leans outward), bend (×hw, bean bow). Placement: lon, lat = rest eye centre on the
      sphere (gaze still adds the head turn). Lid: amin = flattest allowed aspect (1 = may round off to a
      circle; ≥ h/w = keep its own aspect, as 'ref' does), sq = how much a squint/blink shrinks it instead of squashing.
+     slant/cutc/cutk = a soft slanted top cut at height cutc·hh (0 = none), tilted by slant (rad; mirrored, + = high
+     outside), corner cutk·hw; asw/ahy/atilt = 3/4-view asymmetry at full strength (scaled by v[4], see eyeShapeV).
      top = 1: blink/lid come down from the top like a real lid (corner rounding ck×hw) and a happy squint shrinks
      the eye toward its bottom, so it never gets flatter than its own aspect except under the lid.
      A morph lerps all of these, so the shader runs ONE SDF per tap and the eyes glide to the new spot. */
   const SHAPES=Object.freeze([
-    Object.freeze({name:'stadium', w:.23, h:.52, ex:1,    r:1,   e:0, taper:0,   tilt:0,    bend:0, lon:.2, lat:.04, amin:1, sq:.15, top:0, ck:0}),   // default pill
-    Object.freeze({name:'egg',     w:.24, h:.33, ex:1.2,  r:1,   e:1, taper:.17, tilt:0,    bend:0, lon:.2, lat:.04, amin:1, sq:.15, top:0, ck:0}),   // pebble, wider at the bottom
-    Object.freeze({name:'dot',     w:.24, h:.24, ex:1,    r:1,   e:0, taper:0,   tilt:0,    bend:0, lon:.2, lat:.04, amin:1, sq:.15, top:0, ck:0}),   // plain circle
-    Object.freeze({name:'oval',    w:.22, h:.42, ex:1,    r:1,   e:1, taper:0,   tilt:0,    bend:0, lon:.2, lat:.04, amin:1, sq:.15, top:0, ck:0}),   // smooth tall ellipse
-    Object.freeze({name:'bean',    w:.2,  h:.4,  ex:1.45, r:1,   e:1, taper:0,   tilt:.244, bend:.35, lon:.2, lat:.04, amin:1, sq:.15, top:0, ck:0}), // leaning kidney bean
-    Object.freeze({name:'squircle',w:.225,h:.245,ex:1.3,  r:.55, e:0, taper:0,   tilt:0,    bend:0, lon:.2, lat:.04, amin:1, sq:.15, top:0, ck:0}), // soft rounded square
+    Object.freeze({name:'stadium', w:.23, h:.52, ex:1,    r:1,   e:0, taper:0,   tilt:0,    bend:0, lon:.2, lat:.04, amin:1, sq:.15, top:0, ck:0, slant:0, cutc:0, cutk:0, asw:0, ahy:0, atilt:0}),   // default pill
+    Object.freeze({name:'egg',     w:.24, h:.33, ex:1.2,  r:1,   e:1, taper:.17, tilt:0,    bend:0, lon:.2, lat:.04, amin:1, sq:.15, top:0, ck:0, slant:0, cutc:0, cutk:0, asw:0, ahy:0, atilt:0}),   // pebble, wider at the bottom
+    Object.freeze({name:'dot',     w:.24, h:.24, ex:1,    r:1,   e:0, taper:0,   tilt:0,    bend:0, lon:.2, lat:.04, amin:1, sq:.15, top:0, ck:0, slant:0, cutc:0, cutk:0, asw:0, ahy:0, atilt:0}),   // plain circle
+    Object.freeze({name:'oval',    w:.22, h:.42, ex:1,    r:1,   e:1, taper:0,   tilt:0,    bend:0, lon:.2, lat:.04, amin:1, sq:.15, top:0, ck:0, slant:0, cutc:0, cutk:0, asw:0, ahy:0, atilt:0}),   // smooth tall ellipse
+    Object.freeze({name:'bean',    w:.2,  h:.4,  ex:1.45, r:1,   e:1, taper:0,   tilt:.244, bend:.35, lon:.2, lat:.04, amin:1, sq:.15, top:0, ck:0, slant:0, cutc:0, cutk:0, asw:0, ahy:0, atilt:0}), // leaning kidney bean
+    Object.freeze({name:'squircle',w:.225,h:.245,ex:1.3,  r:.55, e:0, taper:0,   tilt:0,    bend:0, lon:.2, lat:.04, amin:1, sq:.15, top:0, ck:0, slant:0, cutc:0, cutk:0, asw:0, ahy:0, atilt:0}), // soft rounded square
     // Reference (Henlo's image): a full, closed, plump EGG, narrow rounded end UP, fullest low (~60% down the egg, ~2/3 down the part the image shows),
     // soft and round all round, gentle outward lean (a symmetric average of the two eyes in the image, whose flat
     // bottoms are only the dome edge cropping them), large, close (gap ≈ half an eye width), centred on the orb.
-    Object.freeze({name:'ref',     w:.44, h:.5, ex:1.25, r:1,   e:1, taper:.22, tilt:-.3, bend:0, lon:.44, lat:0, amin:99, sq:.22, top:1, ck:.3})]);
+    Object.freeze({name:'ref',     w:.44, h:.5, ex:1.25, r:1,   e:1, taper:.22, tilt:-.3, bend:0, lon:.44, lat:0, amin:99, sq:.22, top:1, ck:.3, slant:0, cutc:0, cutk:0, asw:0, ahy:0, atilt:0}),
+    // Toon (the drawing tutorial's final frame): big rounded eyes with a full round bottom and a soft, slanted,
+    // flatter top cut (high at the outer side, low inside; mirrored), the toon rim crescent hugs it. The tutorial
+    // is a 3/4 view: asymmetry (slider, 1 = the tutorial) makes the left eye narrower and higher and tilts both
+    // tops the same way. asw = width difference, ahy = height offset (eye heights), atilt = shared top tilt (rad).
+    Object.freeze({name:'toon',    w:.5, h:.65, ex:1.3, r:1, e:.9, taper:.15, tilt:0, bend:0, lon:.38, lat:.03, amin:99, sq:.22, top:1, ck:.3, slant:.18, cutc:.88, cutk:.35, asw:.17, ahy:.17, atilt:.16})]);
   const LID0=REST.w/REST.h;               // lid at which the stadium reaches a circle (fade starts below it)
   /* Box for any shape. Lid/blink close it vertically: hh goes from the natural height to round (hh = hw)
      as lid goes 1 → LID0, then the eye fades (lidFade). For the stadium this is EXACTLY stadiumOf + lidFade
@@ -82,6 +89,16 @@
   /* v = [size, lid, shapeIndex, happy]. Also writes the lid frame used by the shader (radians, eye-local):
      o.oy = egg-centre offset (a 'top' shape's squint shrinks toward its bottom, so the centre drops), o.vtop =
      lid line relative to the egg centre (parked 1.5·hh above for the others = no effect), o.ck lid corner. */
+  /* slanted top cut + 3/4 asymmetry (radians, eye-local): o.asx = ±width scale per side (right 1+asx, left 1−asx),
+     o.asy = ±height offset (left up, right down), o.cut = cut line height (parked 9·hh = none), o.cutk = corner,
+     (o.nLx, o.nLy) / (o.nRx, o.nRy) = the cut line's normal for the left / right eye. A = v[4] (1 = the tutorial). */
+  function cutFrame(o,S,A){
+    const a=clamp(A||0,0,1.5); o.asx=S.asw/2*a; o.asy=S.ahy*o.hh*a;
+    const pR=S.slant+S.atilt*a, pL=-S.slant+S.atilt*a;             // top line angle per eye (+ = rising to the right)
+    o.nLx=-Math.sin(pL); o.nLy=Math.cos(pL); o.nRx=-Math.sin(pR); o.nRy=Math.cos(pR);
+    o.cut=S.cutc?S.cutc*o.hh:9*o.hh; o.cutk=S.cutc?Math.max(1e-3,S.cutk*o.hw):1e-3;
+    return o;
+  }
   function eyeShapeV(o,v){
     const S=SHAPES[v[2]|0]||SHAPES[0], s=Math.max(0,v[0]), l=Math.max(0,v[1]);
     if(S.top){                                                         // real-lid shapes ('ref')
@@ -92,7 +109,7 @@
       const lb=clamp(l/Math.max(.2,1-.5*hp),0,1);                      // the lid with the squint factored out
       o.vtop=o.hh*(2.25*lb-1);                                         // lid line: 1.25·hh above (open) → bottom
       o.ck=Math.max(1e-3,S.ck*o.hw); o.fade=s<=0?0:clamp(lb*5,0,1);
-      return o;
+      return cutFrame(o,S,v[4]);
     }
     let w=S.w*s; const h=S.h*s; if(h<w) w=h;
     const k=Math.min(1,Math.max(0,(l-LID0)/(1-LID0)));                 // 1 open … 0 flattest allowed
@@ -102,7 +119,7 @@
     o.hw=w/2*shrink; o.hh=(hmin+(h-hmin)*k)/2*shrink; o.cap=Math.max(0,o.hh-o.hw);
     o.fade=w<=0?0:(l>=LID0?1:Math.max(0,l/LID0)); o.ex=S.ex;
     o.oy=0; o.vtop=1.5*o.hh; o.ck=1e-3;                               // no lid line (parked well above)
-    return o;
+    return cutFrame(o,S,v[4]);
   }
   const len=(x,y)=>Math.sqrt(x*x+y*y), clamp=(x,a,b)=>Math.min(b,Math.max(a,x));
   // ellipse, semi-axes a, b (iq's gradient-normalised approximation: exact on the boundary)
@@ -136,13 +153,19 @@
     const egg=(dS+(sdEllipse(x,y,hw,hh)-dS)*P.e)*g;                   // narrow-end-up egg
     return smax(egg,v-C.vtop,C.ck);                                    // lid from the top
   }
+  /* 7 toon (the drawing tutorial's final frame): a rounded ellipse (mostly ellipse) with a soft slanted top cut,
+     high at the outer side and low inside, mirrored per side; plus the 3/4 asymmetry and the lid from C.
+     C = the eyeShapeV box (needed: it carries the cut, the asymmetry and the lid); same as eyeSDFP(…, SHAPES.toon, C). */
+  function sdToon(u,v,hw,hh,side,C){ return eyeSDFP(u,v,hw,hh,side,SHAPES[7],C); }
   function sdSquircle(u,v,hw,hh){ const r=.55*hw, qx=Math.abs(u)-hw+r, qy=Math.abs(v)-hh+r;
     return len(Math.max(qx,0),Math.max(qy,0))+Math.min(Math.max(qx,qy),0)-r; }
-  const SDF=[sdStadium,sdEgg,sdDot,sdOval,sdBean,sdSquircle,sdRef];
-  function eyeSDF(id,u,v,hw,hh,side){ return (SDF[id|0]||sdStadium)(u,v,hw,hh,side); }
+  const SDF=[sdStadium,sdEgg,sdDot,sdOval,sdBean,sdSquircle,sdRef,sdToon];
+  function eyeSDF(id,u,v,hw,hh,side,C){ return (SDF[id|0]||sdStadium)(u,v,hw,hh,side,C); }
   /* The one the shader runs: every shape above is this function at its SHAPES params (checked in tests):
      lean + bow (bean) → taper (egg) → mix(rounded box with corner r·hw, ellipse, e). */
   function eyeSDFP(u,v,hw,hh,side,P,C){
+    const A=C&&C.cut!==undefined, sx=A?1+side*C.asx:1;
+    if(A){ v+=side*C.asy; u/=sx; }                                     // 3/4 asymmetry: per-eye width + height
     if(C) v-=C.oy;
     const c=Math.cos(P.tilt), s=Math.sin(P.tilt);
     let x=c*u+side*s*v; const y=-side*s*u+c*v, yn=clamp(y/hh,-1,1);
@@ -151,7 +174,9 @@
     const r=P.r*hw, qx=Math.abs(x)-hw+r, qy=Math.abs(y)-hh+r;
     const dR=len(Math.max(qx,0),Math.max(qy,0))+Math.min(Math.max(qx,qy),0)-r;
     const d=(dR+(sdEllipse(x,y,hw,hh)-dR)*P.e)*g;
-    return C?smax(d,v-C.vtop,C.ck):d;
+    if(!C) return d;
+    const e=A?smax(d,(side<0?C.nLx:C.nRx)*u+(side<0?C.nLy:C.nRy)*v-C.cut,C.cutk):d;   // soft slanted top cut
+    return smax(e,v-C.vtop,C.ck)*Math.min(sx,1);
   }
   /* ---- toon layer (the drawing tutorial's eyes), for every shape ----
      Rim: the white's SDF shifted up + outward and grown a touch, drawn BEHIND the white → only a crescent shows,
@@ -175,6 +200,9 @@
   // rim SDF (< 0 inside the dark shape; the visible crescent is where this is < 0 and the white's SDF is > 0)
   function sdToonRim(u,v,hw,hh,side,P,C,T){ return eyeSDFP(u-side*T.ox,v-T.oy,hw,hh,side,P,C)-T.grow; }
   // pupil SDF, already clipped by the white (dWhite = the white's SDF at the same point)
-  function sdPupil(u,v,side,T,dWhite){ return Math.max(sdEllipse(u+side*T.pin-T.pu,v-T.pv,T.a,T.b),dWhite); }
-  window.AstridFace=Object.freeze({SHAPES,eyeShapeV,eyeSDF,eyeSDFP,TOON,toonV,sdToonRim,sdPupil,sdStadium,sdEgg,sdDot,sdOval,sdBean,sdSquircle,sdRef,CX,CY,RR,REST,projector,projectInto,projectV,stadiumOf,lidFade,eyePts,eyeUniforms,eyeInto,eyeV});
+  function sdPupil(u,v,side,T,dWhite,C){
+    const sx=C&&C.asx!==undefined?1+side*C.asx:1; if(sx!==1||C&&C.asy) { v+=side*C.asy; u/=sx; }
+    return Math.max(sdEllipse(u+side*T.pin-T.pu,v-T.pv,T.a,T.b)*Math.min(sx,1),dWhite);
+  }
+  window.AstridFace=Object.freeze({SHAPES,eyeShapeV,eyeSDF,eyeSDFP,TOON,toonV,sdToonRim,sdPupil,sdStadium,sdEgg,sdDot,sdOval,sdBean,sdSquircle,sdRef,sdToon,CX,CY,RR,REST,projector,projectInto,projectV,stadiumOf,lidFade,eyePts,eyeUniforms,eyeInto,eyeV});
 })();

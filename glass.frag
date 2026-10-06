@@ -39,6 +39,8 @@ uniform vec4  uEyeP;    // eyes: -, -, lidFade (morph-blended), capsule radius (
 uniform vec4  uEyeA;    // eye box (radians): half width, half visible height (morph-blended), 1/hw, 1/hh
 uniform vec4  uShape;   // eye shape params: corner radius ×hw, ellipse weight, egg taper, -
 uniform vec4  uShapeT;  // eye shape params: cos lean, sin lean, bean bow ×hw, rest lon of the eyes (±)
+uniform vec4  uAsym;    // toon shape: width scale ±(1 + side·x), height offset (side·y), top cut height, cut corner k
+uniform vec4  uCutN;    // slanted top cut normal: left eye (xy), right eye (zw)
 uniform vec4  uToon;    // toon layer: rim alpha (0 = off → skipped), pupil alpha (0 = off), rim grow (rad), -
 uniform vec4  uToonR;   // toon rim offset (rad): outward, up, -, -
 uniform vec4  uPupil;   // pupil centre (rad, eye-local): inward rest, gaze u, v, -
@@ -78,12 +80,14 @@ vec3 tint(vec3 col, vec3 c, float a){
 // ---- eye shapes: ONE parametric SDF in eye-local sphere coords (radians; < 0 inside), box b = (half w,
 // half h). Every shape is a parameter set (face.js SHAPES / eyeSDFP): stadium = rounded box with r = hw,
 // squircle r = .55hw, dot = round box, oval = ellipse, egg = tapered ellipse, bean = leaning bowed ellipse,
-// ref = plump (mostly ellipse) egg leaning outward, placed low and wide (rest lon/lat per shape).
+// ref = plump (mostly ellipse) egg leaning outward; toon = rounded ellipse with a soft slanted top cut + 3/4 asymmetry.
 // A shape switch lerps the params on the CPU → no branches, one evaluation per tap, even mid-morph.
 // smooth max: rounds the corner where the lid line meets the shape by ~k
 float smax(float a, float c, float k){ float h = max(k - abs(a - c), 0.0) / k; return max(a, c) + h * h * k * 0.25; }
 float eyeSDF(vec2 p, vec2 b, float side){
-  p.y -= uShapeC.x;                                                       // squint: centre drops ('ref')
+  float sx = 1.0 + side * uAsym.x;                                        // 3/4 asymmetry ('toon'; 0 otherwise):
+  p.y += side * uAsym.y; p.x /= sx;                                       //  per-eye width + height
+  p.y -= uShapeC.x;                                                       // squint: centre drops ('top' shapes)
   vec2 ib = uEyeA.zw;                                                     // 1/b (CPU)
   vec2 q = vec2(uShapeT.x * p.x + side * uShapeT.y * p.y, -side * uShapeT.y * p.x + uShapeT.x * p.y);  // lean
   float yn = clamp(q.y * ib.y, -1.0, 1.0);
@@ -95,7 +99,8 @@ float eyeSDF(vec2 p, vec2 b, float side){
   float k0 = length(e0);                                                  //  approx, exact on the edge)
   float dE = k0 * (k0 - 1.0) * inversesqrt(max(dot(e1, e1), 1e-8));
   float d = mix(dR, dE, uShape.y) * g;
-  return smax(d, p.y - uShapeC.y, uShapeC.z);                             // lid from the top ('ref'; parked above otherwise)
+  d = smax(d, dot(p, side < 0.0 ? uCutN.xy : uCutN.zw) - uAsym.z, uAsym.w);   // soft slanted top cut ('toon'; parked)
+  return smax(d, p.y - uShapeC.y, uShapeC.z) * min(sx, 1.0);              // lid from the top ('top' shapes; parked)
 }
 
 // eye shading for one chroma tap, given its sphere coordinates (lon, lat) and visible-hemisphere Z
@@ -124,10 +129,11 @@ vec3 eyeTap(vec3 col, float lon, float lat, float Z, float rimA){
   // Centre tap only (rimA ≥ 0 marks it): no RGB fringe on the pupil; applied after the three taps.
 #ifdef TOON
   if (uToon.y > 0.0 && rimA >= 0.0) {
-    vec2 pq = vec2(u + side * uPupil.x - uPupil.y, v - uPupil.z);
+    float psx = 1.0 + side * uAsym.x;                           // pupils follow the 3/4 asymmetry
+    vec2 pq = vec2(u / psx + side * uPupil.x - uPupil.y, v + side * uAsym.y - uPupil.z);
     vec2 p0 = pq * uPupilA.zw, p1 = p0 * uPupilA.zw;
     float pk = length(p0);
-    float dp = pk * (pk - 1.0) * inversesqrt(max(dot(p1, p1), 1e-8)) * RR * (0.5 * Z + 0.5);
+    float dp = pk * (pk - 1.0) * inversesqrt(max(dot(p1, p1), 1e-8)) * min(psx, 1.0) * RR * (0.5 * Z + 0.5);
     gPupil = uToon.y * vis * (1.0 - smoothstep(-w, w, max(dp, ds)));
   }
 #endif
