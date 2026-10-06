@@ -5,7 +5,7 @@
    (screen → sphere → un-rotate → lon/lat) and evaluates the stadium analytically there.
    Exposes window.AstridFace. */
 (function(){
-  const CX=120, CY=120, RR=110, REST={lon:.2, lat:.04, w:.23, h:.52};
+  const CX=120, CY=120, RR=110, REST=Object.freeze({lon:.2, lat:.04, w:.23, h:.52});
   function projector(yaw,pitch,roll){
     const cp=Math.cos(pitch),sp=Math.sin(pitch),cy=Math.cos(yaw),sy=Math.sin(yaw),cr=Math.cos(roll),sr=Math.sin(roll);
     return (lon,lat)=>{
@@ -30,5 +30,5 @@
     const [w,h]=stadiumOf(e), vis=Math.max(w,h*e.lid), hw=w/2, cap=Math.max(0,vis/2-hw);
     return {hw,cap,fade:lidFade(e)};
   }
-  window.AstridFace={CX,CY,RR,REST,projector,stadiumOf,lidFade,eyePts,eyeUniforms};
+  window.AstridFace=Object.freeze({CX,CY,RR,REST,projector,stadiumOf,lidFade,eyePts,eyeUniforms});
 })();

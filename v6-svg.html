@@ -3,12 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Astrid · glass</title>
+<meta name="theme-color" content="#e9e9eb">
+<title>Astrid · glass (SVG fallback)</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Ccircle cx=%278%27 cy=%278%27 r=%277%27 fill=%27%2376b4f1%27/%3E%3C/svg%3E">
 <style>
   :root{--paper:#e9e9eb;--ink:#4a5568}
   html,body{margin:0;height:100%;background:var(--paper);overflow:hidden;transition:background .4s}
   body{display:grid;place-items:center;font:500 12px/1 -apple-system,"Instrument Sans",system-ui,sans-serif;color:var(--ink)}
-  .stage{position:relative;width:min(84vmin,620px);aspect-ratio:1;cursor:pointer;--u:calc(min(84vmin,620px) / 340)}
+  .stage{position:relative;width:min(84vmin,620px);aspect-ratio:1;cursor:pointer;--u:calc(min(84vmin,620px) / 340);touch-action:none}
   .stage svg{position:absolute;inset:0;width:100%;height:100%;display:block}
   #bg{will-change:transform}
   #eyes{will-change:transform,filter;filter:blur(1.3px)}
@@ -158,7 +160,7 @@ function palette(name,dark){
           glow:isDark?mix(mark,core,.4):'#ffffff',shadow:isDark?'#000000':mark,ink:mix(mark,paper,.3),inner:isDark?.2:.55};
 }
 const $=id=>document.getElementById(id), stop=(id,c)=>$(id).setAttribute('stop-color',c);
-function applyCoat(name,dark){
+function applyCoat(name,dark,persist){
   const p=palette(name,dark);
   document.documentElement.style.setProperty('--paper',p.paper);
   document.documentElement.style.setProperty('--ink',p.ink);
@@ -175,12 +177,17 @@ function applyCoat(name,dark){
   stop('e0',p.eyeHi); stop('e1',p.eye); stop('e2',p.eyeLo);
   $('innerLine').setAttribute('opacity',p.inner);
   document.querySelectorAll('.glow').forEach(u=>u.setAttribute('stroke',p.glow));
-  localStorage.setItem('astridCoat',JSON.stringify({name,dark}));
+  if(persist!==false){try{localStorage.setItem('astridCoat',JSON.stringify({name,dark}))}catch(e){}}
+  const tm=document.querySelector('meta[name=theme-color]'); if(tm) tm.content=p.paper;
   document.querySelectorAll('.coats button[data-c]').forEach(b=>b.setAttribute('aria-pressed',b.dataset.c===name));
   $('modeBtn').textContent=dark?'Dark':'Light';
   state={name,dark};
 }
-let state=JSON.parse(localStorage.getItem('astridCoat')||'{"name":"glass","dark":false}');
+let state=null; try{state=JSON.parse(localStorage.getItem('astridCoat')||'null')}catch(e){}
+if(!state||typeof state!=='object'||!(state.name==='glass'||COATS[state.name])) state={name:'glass',dark:false};
+const Q=new URLSearchParams(location.search), qCoat=Q.get('coat'), qMode=Q.get('mode');   // same test hooks as index.html
+if(qCoat&&(qCoat==='glass'||COATS[qCoat])) state.name=qCoat;
+if(qMode) state.dark=qMode==='dark';
 const bar=$('coats');
 ['glass',...Object.keys(COATS)].forEach(n=>{
   const b=document.createElement('button'); b.dataset.c=n; b.title=n[0].toUpperCase()+n.slice(1);
@@ -189,7 +196,7 @@ const bar=$('coats');
 });
 const mb=document.createElement('button'); mb.id='modeBtn'; mb.className='mode';
 mb.onclick=e=>{e.stopPropagation();applyCoat(state.name,!state.dark)}; bar.appendChild(mb);
-applyCoat(state.name,state.dark);
+applyCoat(state.name,!!state.dark,!(qCoat||qMode));
 
 /* ---------- port of AstridFace.projector + eyePath + stadiumOf + lidFade ---------- */
 const CX=120, CY=120, RR=110, REST={lon:.2, lat:.04, w:.23, h:.52};
@@ -235,7 +242,7 @@ function stepDrift(d,now){
 }
 const stage=$('astrid'), eL=$('eyeL'), eR=$('eyeR'), gL=$('gL'), gR=$('gR');
 let pointerAt=0;
-addEventListener('pointermove',ev=>{
+addEventListener("pointermove",ev=>{
   const r=stage.getBoundingClientRect();
   const dx=(ev.clientX-(r.left+r.width/2))/(r.width/2), dy=(ev.clientY-(r.top+r.height/2))/(r.height/2);
   yaw.t=Math.max(-1,Math.min(1,dx))*.5; pitch.t=Math.max(-1,Math.min(1,dy))*.34; pointerAt=performance.now();
@@ -261,16 +268,23 @@ function fringe(g,pts){
   g.children[1].setAttribute('transform',`translate(${(-ux*amt-.6).toFixed(2)} ${(-uy*amt+.2).toFixed(2)})`);
   g.children[2].setAttribute('transform',`translate(${( ux*amt+.6).toFixed(2)} ${( uy*amt-.2).toFixed(2)})`);
 }
-let lastKey='';
-function frame(now){
-  lid.t = now<blinkUntil ? 0 : 1;
+let lastKey='', lastT=0, acc=0, simNow=performance.now();
+function tick(){                 // fixed 60 Hz motion step: same feel at 30/60/120 Hz
+  simNow+=1000/60; const now=simNow;
+  lid.t = performance.now()<blinkUntil ? 0 : 1;
   [yaw,pitch,size,lid].forEach(step);
   hist.push({t:now,y:yaw.x,p:pitch.x});
   while(hist.length>1 && hist[1].t<=now-LAG) hist.shift();
   cYaw.t=hist[0].y; cPitch.t=hist[0].p;
   step(cYaw); step(cPitch);
-  const key=[yaw.x,pitch.x,size.x,lid.x,cYaw.x,cPitch.x].map(v=>v.toFixed(3)).join();
   drifts.forEach(d=>stepDrift(d,now));
+}
+function frame(now){
+  if(!lastT) lastT=now;
+  acc+=Math.min(now-lastT,100); lastT=now;
+  let n=0; while(acc>=1000/60&&n<6){tick();acc-=1000/60;n++;}
+  if(acc>=1000/60) acc=0;
+  const key=[yaw.x,pitch.x,size.x,lid.x,cYaw.x,cPitch.x].map(v=>v.toFixed(3)).join();
   if(key!==lastKey){
     lastKey=key;
     const xf=projector(yaw.x,pitch.x,0), l=Math.max(0,lid.x);

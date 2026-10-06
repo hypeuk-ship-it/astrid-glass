@@ -27,7 +27,7 @@ uniform vec4  uEyeC;    // eyes: projected screen centres (L.xy, R.xy) — cheap
 uniform vec4  uCoreM;   // glass head-turn: offset xy (units, inverted to gaze), foreshorten scale xy
 uniform mat2  uMA, uMB, uMC; // blob drift (floor, pool, bloom): inverse of rotate·scale (precomputed in JS)
 uniform vec2  uTA, uTB, uTC; // blob drift: drift origin (120,144.8) + translate (units)
-uniform float uNT;      // noise time (advanced by JS × drift speed)
+uniform float uNT;      // noise time (advanced by JS × drift speed, wrapped at 28900)
 uniform vec4  uTune1;   // eye RGB split, edge softness, haze, pool height
 uniform vec4  uTune2;   // eye softness, fringe, noise warp (units), pool strength
 
@@ -38,10 +38,14 @@ const vec3  PINK = vec3(0.976, 0.620, 0.902);
 const vec3  CYAN = vec3(0.560, 0.905, 1.000);
 
 float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+// lattice wrapped to 289 cells → the noise is periodic, so JS can wrap uNT (period 28900 s, a common
+// multiple of every rate below ×289) and the hash never sees huge arguments after hours on screen.
+// Identical to the unwrapped noise for the first 289 lattice cells.
 float vnoise(vec2 p){
   vec2 i = floor(p), f = fract(p); f = f*f*(3.0 - 2.0*f);
-  return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
-             mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+  vec2 j = mod(i + 1.0, 289.0); i = mod(i, 289.0);              // wrap both corners → seamless
+  return mix(mix(hash(i), hash(vec2(j.x, i.y)), f.x),
+             mix(hash(vec2(i.x, j.y)), hash(j), f.x), f.y);
 }
 float gauss(float x, float w){ return exp(-(x*x) / (w*w)); }
 
@@ -92,7 +96,7 @@ vec3 eyes(vec3 col, vec2 p){
 void main(){
   vec2 f = gl_FragCoord.xy;
   vec2 p = C + vec2(f.x - uView.x, uView.y - f.y) * uView.z;
-  vec2 d = p - C; float r = length(d);
+  vec2 d = p - C; float r = length(d * 0.01) * 100.0;   // scaled: no fp16 overflow far off-orb (mediump)
   float es = uTune1.y;
   float low = (p.y - C.y) / R;                 // −1 top … +1 bottom
 
@@ -155,6 +159,6 @@ void main(){
     col = vec3(eyes(col, p + off).r, eyes(col, p).g, eyes(col, p - off).b);
   }
 
-  col += (hash(f) - 0.5) / 255.0;   // dither (kills 8-bit banding in the soft gradients)
+  col += (hash(mod(f, 64.0)) - 0.5) / 255.0;   // dither (kills 8-bit banding); mod keeps mediump finite
   gl_FragColor = vec4(col, 1.0);
 }

@@ -10,6 +10,8 @@
     cyanotype:{paper:['d6eef8','0a1822'],orb:['7eb3cc','0a1822'],mark:['003153','b8d4e4']},
     violet:   {paper:['f0e5f9','160a22'],orb:['c9a0e4','08040e'],mark:['2b1548','e4c8f6']},
   };
+  /* read-only: deep-freeze so nothing at runtime can drift from EInkPalette.swift */
+  Object.values(COATS).forEach(c=>{Object.values(c).forEach(Object.freeze);Object.freeze(c);}); Object.freeze(COATS);
   const hx=h=>{h=h.replace('#','');return [0,2,4].map(i=>parseInt(h.slice(i,i+2),16))};
   const toHex=a=>'#'+a.map(v=>Math.round(Math.max(0,Math.min(255,v))).toString(16).padStart(2,'0')).join('');
   const mix=(a,b,t)=>toHex(hx(a).map((v,i)=>v+(hx(b)[i]-v)*t));
@@ -35,5 +37,5 @@
   const swatch=n=>n==='glass'?'radial-gradient(circle at 50% 85%,#5598e8,#a6d0f7 55%,#ffffff)'
     :'#'+(COATS[n].orb[0]===COATS[n].paper[0]?COATS[n].mark[0]:COATS[n].orb[0]);
 
-  window.AstridCoats={COATS,names:['glass',...Object.keys(COATS)],palette,swatch,mix,rgb,lum};
+  window.AstridCoats=Object.freeze({COATS,names:Object.freeze(['glass',...Object.keys(COATS)]),palette,swatch,mix,rgb,lum});
 })();
