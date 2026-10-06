@@ -24,6 +24,10 @@
   .eyes button svg{width:20px;height:14px;display:block;margin:auto}
   .eyes button[aria-pressed=true]{border-color:currentColor;opacity:.9}
   .eyes button:hover{opacity:.9}
+  .eyes button.toon{width:auto;padding:0 9px;margin-left:8px;font:inherit;font-size:11px;border-color:currentColor;opacity:.55}
+  .eyes button.toon[aria-pressed=true]{opacity:.9;background:color-mix(in srgb,currentColor 14%,transparent)}
+  #dbg label.chk{grid-template-columns:1fr auto}
+  #dbg label.chk input{grid-column:auto;width:auto;height:auto}
   #dbg select{grid-column:1 / 3;font:inherit;color:#e8ecf4;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.18);border-radius:6px;padding:3px 4px}
   #dbg select option{color:#111}
   .coats .mode,.coats .snd{width:auto;height:22px;border-radius:11px;padding:0 10px;background:transparent;color:var(--ink);font:inherit;border-color:currentColor;opacity:.7}
@@ -91,6 +95,11 @@ uniform vec4  uEyeP;    // eyes: -, -, lidFade (morph-blended), capsule radius (
 uniform vec4  uEyeA;    // eye box (radians): half width, half visible height (morph-blended), 1/hw, 1/hh
 uniform vec4  uShape;   // eye shape params: corner radius ×hw, ellipse weight, egg taper, -
 uniform vec4  uShapeT;  // eye shape params: cos lean, sin lean, bean bow ×hw, rest lon of the eyes (±)
+uniform vec4  uToon;    // toon layer: rim alpha (0 = off → skipped), pupil alpha (0 = off), rim grow (rad), -
+uniform vec4  uToonR;   // toon rim offset (rad): outward, up, -, -
+uniform vec4  uPupil;   // pupil centre (rad, eye-local): inward rest, gaze u, v, -
+uniform vec4  uPupilA;  // pupil semi-axes a, b and 1/a, 1/b (rad)
+uniform vec3  uToonCol; // toon ink: the coat's dark/mark tone
 uniform vec4  uShadow;  // eye drop shadow: strength, lat offset down (rad), gauss k (exp2), -
 uniform vec4  uShapeC;  // eye lid (radians): egg-centre offset, lid line (rel. to centre), corner k, -
 uniform vec4  uEyeL, uEyeR; // eyes: tight bounding capsules = projected stadium axis ends (a.xy, b.xy), screen units
@@ -146,7 +155,8 @@ float eyeSDF(vec2 p, vec2 b, float side){
 }
 
 // eye shading for one chroma tap, given its sphere coordinates (lon, lat) and visible-hemisphere Z
-vec3 eyeTap(vec3 col, float lon, float lat, float Z){
+float gPupil;   // toon pupil coverage, written by the centre tap
+vec3 eyeTap(vec3 col, float lon, float lat, float Z, float rimA){
   float side = lon < 0.0 ? -1.0 : 1.0;
   float u = lon - uShapeT.w * side;
   // happy: eyes lift a touch and bow into a soft ∩ (edges droop) — any shape, never flatter than round
@@ -156,8 +166,9 @@ vec3 eyeTap(vec3 col, float lon, float lat, float Z){
   float w  = uEyeK.x;
   float vis = uEyeP.z * smoothstep(0.02, 0.08, Z);            // lidFade · z>0.02 cull
   float dsp = max(ds, 0.0);
-  col = tint(col, uGlow, 0.26 * g2(dsp, uEyeK.y) * vis);      // soft luminous glow
-  col = mix(col, uAura.rgb, uAura.a * g2(dsp - 1.5, uEyeK.z) * vis);   // pool-coloured aura
+  float gv = vis * (1.0 - abs(rimA));                              // the toon rim stays crisp (no glow over it)
+  col = tint(col, uGlow, 0.26 * g2(dsp, uEyeK.y) * gv);       // soft luminous glow
+  col = mix(col, uAura.rgb, uAura.a * g2(dsp - 1.5, uEyeK.z) * gv);    // pool-coloured aura
   // pebble fill: bright top-right → white → faint shade lower-left, plus a soft inner edge shade
   float uu = clamp(u * uEyeK.w * 0.5 + 0.5, 0.0, 1.0);
   float vv = clamp(0.5 - v * uEyeK2.x, 0.0, 1.0);
@@ -165,6 +176,17 @@ vec3 eyeTap(vec3 col, float lon, float lat, float Z){
   vec3 ec  = t < 0.5 ? mix(uEyeHi, uEye, t * 2.0) : mix(uEye, uEyeLo, 0.55 * smoothstep(0.55, 1.0, t));
   float rimShade = smoothstep(uEyeK2.y, 0.0, ds) * smoothstep(0.3, 0.9, t);
   ec = mix(ec, uEyeLo, 0.4 * rimShade);
+  // toon pupil (face.js sdPupil): upright dark oval clipped by the white → lid/squint/blink cover it too.
+  // Centre tap only (rimA ≥ 0 marks it): no RGB fringe on the pupil; applied after the three taps.
+#ifdef TOON
+  if (uToon.y > 0.0 && rimA >= 0.0) {
+    vec2 pq = vec2(u + side * uPupil.x - uPupil.y, v - uPupil.z);
+    vec2 p0 = pq * uPupilA.zw, p1 = p0 * uPupilA.zw;
+    float pk = length(p0);
+    float dp = pk * (pk - 1.0) * inversesqrt(max(dot(p1, p1), 1e-8)) * RR * (0.5 * Z + 0.5);
+    gPupil = uToon.y * vis * (1.0 - smoothstep(-w, w, max(dp, ds)));
+  }
+#endif
   float fill = 1.0 - smoothstep(-w, w, ds);
   return mix(col, ec, fill * vis);
 }
@@ -179,6 +201,19 @@ vec3 eyeShadow(vec3 col, float lon, float lat, float Z){
   float sh = uShadow.x * uEyeP.z * smoothstep(0.02, 0.08, Z) * g2(max(ds, 0.0), uShadow.z);
   return col * mix(vec3(1.0), uDeep * 0.85, sh);
 }
+#ifdef TOON
+// toon rim (face.js sdToonRim): the eye SDF grown a little and shifted up + outward, drawn BEHIND the white,
+// so only a crescent shows — thick at the top-outer edge, tapering to nothing low and inside (a lid/lash line).
+// Once per pixel (centre tap); the white's own taps then cover it with the usual cyan split on the edge.
+float eyeRim(float lon, float lat, float Z){
+  float side = lon < 0.0 ? -1.0 : 1.0;
+  float u = lon - uShapeT.w * side;
+  float v = lat - uEyeK2.z + uEyeK2.w * u * u;
+  float d = eyeSDF(vec2(u - side * uToonR.x, v - uToonR.y), uEyeA.xy, side) - uToon.z;
+  float vis = uEyeP.z * smoothstep(0.02, 0.08, Z);
+  return uToon.x * vis * (1.0 - smoothstep(-uEyeK.x, uEyeK.x, d * RR * (0.5 * Z + 0.5)));
+}
+#endif
 // squared distance from p to segment ab (capsule test without a sqrt)
 float seg2(vec2 p, vec4 ab){ vec2 pa = p - ab.xy, ba = ab.zw - ab.xy;
   vec2 e = pa - ba * clamp(dot(pa, ba) / max(dot(ba, ba), 1e-6), 0.0, 1.0); return dot(e, e); }
@@ -208,9 +243,20 @@ vec3 eyes(vec3 col, vec2 p, vec2 off){
   vec2 ds_ = vec2(uFace.x*off.x - uFace.y*off.y, -uFace.y*off.x - uFace.x*off.y) * (1.0 / RR);
   vec3 dl = vec3(dot(gLon, ds_), dot(gLat, ds_), dot(gZ, ds_));
   col = eyeShadow(col, lon, lat, Z);
-  return vec3(eyeTap(col, lon + dl.x, lat + dl.y, Z + dl.z).r,
-              eyeTap(col, lon, lat, Z).g,
-              eyeTap(col, lon - dl.x, lat - dl.y, Z - dl.z).b);
+#ifdef TOON
+  // toon variant (compiled only while the toon layer is on: '#define TOON' is prepended by index.html)
+  float rimA = 0.0;                                            // ≥ 0 on the centre tap, ≤ 0 on the side taps
+  if (uToon.x > 0.0) { rimA = eyeRim(lon, lat, Z); col = mix(col, uToonCol, rimA); }
+  gPupil = 0.0;
+  float cg = eyeTap(col, lon, lat, Z, rimA).g;                 // centre tap (also the pupil)
+  vec3 c = vec3(eyeTap(col, lon + dl.x, lat + dl.y, Z + dl.z, -rimA).r, cg,
+                eyeTap(col, lon - dl.x, lat - dl.y, Z - dl.z, -rimA).b);   // −rimA: side taps skip the pupil
+  return mix(c, uToonCol, gPupil);
+#else
+  return vec3(eyeTap(col, lon + dl.x, lat + dl.y, Z + dl.z, 0.0).r,
+              eyeTap(col, lon, lat, Z, 0.0).g,
+              eyeTap(col, lon - dl.x, lat - dl.y, Z - dl.z, 0.0).b);
+#endif
 }
 
 void main(){
@@ -312,9 +358,9 @@ void main(){
   gl_Position = vec4(aPos, 0.0, 1.0);
 }
 </script>
-<script src="coats.js?v=10062215"></script>
-<script src="springs.js?v=10062215"></script>
-<script src="face.js?v=10062215"></script>
+<script src="coats.js?v=10062245"></script>
+<script src="springs.js?v=10062245"></script>
+<script src="face.js?v=10062245"></script>
 <script>
 (function(){
 'use strict';
@@ -336,7 +382,8 @@ const store={get(k){try{return localStorage.getItem(k)}catch(e){return null}},
 /* ---------------- tuning (debug sliders) ---------------- */
 const TUNE_KEY='astridTuneVibe';
 const TUNE_DEF={lag:110,gk:.022,gd:.72,follow:.8,dSpeed:1,dAmt:1,edge:1,haze:1,poolH:1,poolI:1,fringe:1,split:1,eyeScale:1.3,eyeSoft:1,
-  cBuild:1,cDecay:1,tickle:900,dent:1,pull:1,vol:1,bDepth:1,bRate:1,bCalm:1,eyeShadow:.3};
+  cBuild:1,cDecay:1,tickle:900,dent:1,pull:1,vol:1,bDepth:1,bRate:1,bCalm:1,eyeShadow:.3,
+  tRim:1,tPupil:1,rimK:1,pupilK:1,pupilF:1};
 const SLIDERS=[
   ['lag','glass lag (ms)',0,400,5],
   ['gk','glass spring k',.004,.12,.001],
@@ -353,6 +400,9 @@ const SLIDERS=[
   ['eyeScale','eye size',.8,1.6,.01],
   ['eyeSoft','eye softness',0,3,.05],
   ['eyeShadow','eye shadow',0,1,.01],
+  ['rimK','toon rim thickness',0,2.5,.05],
+  ['pupilK','toon pupil size',.5,1.5,.01],
+  ['pupilF','toon pupil follow',0,2,.05],
   ['cBuild','content build',0,3,.05],
   ['cDecay','content decay',0,3,.05],
   ['tickle','tickle threshold (u/s)',400,2000,10],
@@ -363,9 +413,11 @@ const SLIDERS=[
   ['bRate','breath rate',.3,3,.05],
   ['bCalm','content calming',0,2,.05],
 ];
+const TOGGLES=[['tRim','toon rim'],['tPupil','toon pupils']];   // debug on/off (0/1 in T)
 function loadTune(){            // only known keys, finite, clamped to the slider range
   const t=Object.assign({},TUNE_DEF); let s=null;
   try{s=JSON.parse(store.get(TUNE_KEY)||'null')}catch(e){}
+  if(s&&typeof s==='object') TOGGLES.forEach(([k])=>{ if(k in s) t[k]=s[k]?1:0; });
   if(s&&typeof s==='object') SLIDERS.forEach(([k,,min,max])=>{const v=+s[k]; if(k in s&&Number.isFinite(v)) t[k]=Math.min(max,Math.max(min,v));});
   return t;
 }
@@ -378,22 +430,32 @@ const toFallback=why=>{console.warn('Astrid: '+why+', using the SVG fallback'); 
 const gl=cv.getContext('webgl',GL_OPTS)||cv.getContext('experimental-webgl',GL_OPTS);
 if(!gl){ toFallback('WebGL unavailable'); return; }
 const UNIFORMS=['uVS','uBodyM','uNT','uWarp','uPaper','uCore','uDeep','uMid','uEdge','uHalo','uEye','uEyeHi','uEyeLo','uGlow','uBloomCol','uLiftCol','uTouchCol','uAura','uMode',
-  'uRot','uEyeP','uEyeA','uShape','uShapeT','uShapeC','uShadow','uEyeL','uEyeR','uEyeK','uEyeK2','uFace','uQ','uBA','uBB','uBC','uCA','uCB','uCC','uFrost','uPoolK','uFringeK','uMisc','uTouch'];
+  'uRot','uEyeP','uEyeA','uShape','uShapeT','uShapeC','uShadow','uToon','uToonR','uPupil','uPupilA','uToonCol','uEyeL','uEyeR','uEyeK','uEyeK2','uFace','uQ','uBA','uBB','uBC','uCA','uCB','uCC','uFrost','uPoolK','uFringeK','uMisc','uTouch'];
 let U={}, lost=false; const GN=24, GCOUNT=GN*GN*6;
 const draw=()=>gl.drawElements(gl.TRIANGLES,GCOUNT,gl.UNSIGNED_SHORT,0);
-function initGL(){              // (re)build everything GPU-side; also used after a context restore
-  const sh=(type,id)=>{const s=gl.createShader(type);gl.shaderSource(s,$(id).textContent);gl.compileShader(s);
+/* The program comes in two variants: plain, and with '#define TOON' (the toon eye layer). Only the variant in
+   use is compiled, so with toon off its work is gone entirely (not just branched over). */
+let prog=null, progToon=false;
+function buildProg(toon){
+  const sh=(type,id,pre)=>{const s=gl.createShader(type);gl.shaderSource(s,pre+$(id).textContent);gl.compileShader(s);
     if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)&&!gl.isContextLost()) console.error('Astrid shader compile error ('+id+'):\n'+gl.getShaderInfoLog(s));
     return s;};
-  const prog=gl.createProgram(), vs=sh(gl.VERTEX_SHADER,'glass-vert'), fs=sh(gl.FRAGMENT_SHADER,'glass-frag');
-  gl.attachShader(prog,vs); gl.attachShader(prog,fs);
-  gl.bindAttribLocation(prog,0,'aPos'); gl.linkProgram(prog);
+  const p=gl.createProgram(), vs=sh(gl.VERTEX_SHADER,'glass-vert',''), fs=sh(gl.FRAGMENT_SHADER,'glass-frag',toon?'#define TOON\n':'');
+  gl.attachShader(p,vs); gl.attachShader(p,fs);
+  gl.bindAttribLocation(p,0,'aPos'); gl.linkProgram(p);
   gl.deleteShader(vs); gl.deleteShader(fs);                 // flagged; freed with the program
-  if(!gl.getProgramParameter(prog,gl.LINK_STATUS)){
-    if(!gl.isContextLost()) console.error('Astrid link error: '+gl.getProgramInfoLog(prog));
-    return false;
+  if(!gl.getProgramParameter(p,gl.LINK_STATUS)){
+    if(!gl.isContextLost()) console.error('Astrid link error: '+gl.getProgramInfoLog(p));
+    gl.deleteProgram(p); return false;
   }
-  gl.useProgram(prog);
+  if(prog&&gl.isProgram(prog)) gl.deleteProgram(prog);
+  prog=p; progToon=toon; gl.useProgram(p);
+  U={}; UNIFORMS.forEach(n=>U[n]=gl.getUniformLocation(p,n));
+  return true;
+}
+function initGL(){              // (re)build everything GPU-side; also used after a context restore
+  prog=null;                    // a restored context has no old program to delete
+  if(!buildProg(progToon)) return false;
   // one draw call: a GN×GN grid over the canvas (the vertex stage carries the smooth per-pixel work)
   const v=new Float32Array((GN+1)*(GN+1)*2), ix=new Uint16Array(GN*GN*6);
   for(let j=0,k=0;j<=GN;j++) for(let i=0;i<=GN;i++){v[k++]=i/GN*2-1; v[k++]=j/GN*2-1;}
@@ -401,7 +463,6 @@ function initGL(){              // (re)build everything GPU-side; also used afte
   gl.bindBuffer(gl.ARRAY_BUFFER,gl.createBuffer()); gl.bufferData(gl.ARRAY_BUFFER,v,gl.STATIC_DRAW);
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,gl.createBuffer()); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,ix,gl.STATIC_DRAW);
   gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0,2,gl.FLOAT,false,0,0);
-  U={}; UNIFORMS.forEach(n=>U[n]=gl.getUniformLocation(prog,n));
   return true;
 }
 if(!initGL()&&!gl.isContextLost()){ toFallback('shader failed to build'); return; }
@@ -464,6 +525,11 @@ function applyCoat(name,dark,persist){
     const mx=(a,b,t)=>a.map((v,i)=>v+(b[i]-v)*t), CY_=[.560,.905,1.0];
     const mid=rgb(p.mid), edge=rgb(p.edge), core=rgb(p.core), halo=rgb(p.halo), glow=rgb(p.glow);
     gl.uniform3fv(U.uBloomCol,mx(mid,edge,.35)); gl.uniform3fv(U.uLiftCol,mx(mid,CY_,.45)); gl.uniform3fv(U.uTouchCol,mx(halo,glow,p.dark));
+    // toon ink: must contrast with the eye. Glass = deep navy (the tutorial's dark slate; deeper in dark mode).
+    // Coats with light eyes (dark mode) → a deep tone from paper + pool; coats whose eye IS the dark mark (light
+    // mode) → their paper, so the pupils and rim still read (an inverted toon).
+    const toon=name==='glass'?(p.dark?'#13204a':'#2a3d66'):(AstridCoats.lum(p.eye)>.5?AstridCoats.mix(p.paper,p.deep,.15):p.paper);
+    gl.uniform3fv(U.uToonCol,rgb(toon));
     const au=mx(core,mid,.3); gl.uniform4f(U.uAura,au[0],au[1],au[2],.42*(1-.4*p.dark));
   }
   coatDark=palette(name,dark).dark;
@@ -555,19 +621,25 @@ document.addEventListener('visibilitychange',()=>document.hidden?Voice.suspend()
 /* ---------------- pose + glass state ---------------- */
 const yaw=spring(0,.07,.74), pitch=spring(0,.07,.74), size=spring(1,.16,.62), lid=spring(1,.45,.5);
 const gYaw=spring(0,T.gk,T.gd), gPitch=spring(0,T.gk,T.gd);
+/* toon pupils: their own quicker spring on the gaze TARGET, so they lead the head turn (overlap) */
+const pupX=spring(0,.2,.6), pupY=spring(0,.2,.6);
+/* toon layer: off by default; the Toon button (remembered) or ?toon=1 / ?toon=0. toonA fades it in/out */
+const TOON_KEY='astridToon';
+let toonOn=store.get(TOON_KEY)==='1'; if(Q.has('toon')) toonOn=Q.get('toon')!=='0';
+const toonA=spring(toonOn?1:0,.22,.7);
 /* pose history for the glass lag: preallocated ring (no per-tick allocation). 64 ticks > 400 ms max lag */
 const HN=64, hT=new Float64Array(HN), hY=new Float64Array(HN), hP=new Float64Array(HN); let h0=0, hLen=0;
 /* blob drift: random targets on very soft springs (no sine) — floor, pool, bloom */
 const mkDrift=amp=>({amp,x:spring(0,.006,.9),y:spring(0,.006,.9),sx:spring(1,.006,.9),sy:spring(1,.006,.9),r:spring(0,.005,.9),next:0});
 const drifts=[mkDrift({t:5,s:.1,r:10}),mkDrift({t:7,s:.16,r:14}),mkDrift({t:11,s:.3,r:40})];
 const BOX=354/100;   // v6 drift % → units (drift box = 150% of the 236u orb clip)
-const ALL=[yaw,pitch,size,lid,gYaw,gPitch]; drifts.forEach(d=>ALL.push(d.x,d.y,d.sx,d.sy,d.r));
+const ALL=[yaw,pitch,size,lid,gYaw,gPitch,pupX,pupY,toonA]; drifts.forEach(d=>ALL.push(d.x,d.y,d.sx,d.sy,d.r));
 
 /* test hooks: ?yaw=&pitch= freeze the pose (glass snapped); ?still freezes drift + blink + glances */
 const forced=Q.has('yaw')||Q.has('pitch'), still=Q.has('still');
 if(forced){
   const fy=+Q.get('yaw')||0, fp=+Q.get('pitch')||0;
-  [[yaw,fy],[pitch,fp],[gYaw,fy],[gPitch,fp]].forEach(([s,v])=>snap(s,v));
+  [[yaw,fy],[pitch,fp],[gYaw,fy],[gPitch,fp],[pupX,fy],[pupY,fp]].forEach(([s,v])=>snap(s,v));
 }
 /* reduced motion: no idle glances, slower glass drift (pointer follow, blinks and taps stay) */
 const rmq=window.matchMedia?matchMedia('(prefers-reduced-motion: reduce)'):null;
@@ -650,7 +722,7 @@ function setEyes(name,persist){
     SH.b=i; shapeT.t=1;
   }
   if(SH.a===SH.b){ snap(shapeT,0); }
-  document.querySelectorAll('.eyes button').forEach(b=>b.setAttribute('aria-pressed',b.dataset.e===name));
+  document.querySelectorAll('.eyes button[data-e]').forEach(b=>b.setAttribute('aria-pressed',b.dataset.e===name));
   const sel=document.getElementById('dEyes'); if(sel) sel.value=name;
 }
 /* eye-shape buttons: tiny two-eye icons (left eye, right eye), same order as F.SHAPES */
@@ -670,6 +742,13 @@ SHAPE_NAMES.forEach(n=>{
   b.innerHTML='<svg viewBox="0 0 20 14" fill="currentColor" aria-hidden="true">'+EYE_ICONS[n]+'</svg>';
   b.onclick=e=>{e.stopPropagation();setEyes(n);}; eyeBar.appendChild(b);
 });
+const toonBtn=document.createElement('button'); toonBtn.type='button'; toonBtn.className='toon'; toonBtn.textContent='Toon';
+toonBtn.title='Toon eyes (rim + pupils)'; toonBtn.setAttribute('aria-label','Toon eyes');
+function setToon(on,persist){
+  toonOn=!!on; if(persist!==false) store.set(TOON_KEY,toonOn?'1':'0');
+  toonBtn.setAttribute('aria-pressed',String(toonOn)); const c=document.getElementById('dToon'); if(c) c.checked=toonOn;
+}
+toonBtn.onclick=e=>{e.stopPropagation(); setToon(!toonOn);}; eyeBar.appendChild(toonBtn); setToon(toonOn,false);
 eyeBar.addEventListener('pointerdown',e=>e.stopPropagation());
 
 function shapeTick(){
@@ -790,6 +869,8 @@ function tick(){            // one fixed 60 Hz step of the whole motion model
   // happy eyes: lid comes down with content → the stadium shortens toward (never past) a circle
   lid.t=CK.simT<blinkUntil?0:1-.5*Math.max(0,Math.min(1,happy.x));
   step(yaw);step(pitch);step(size);step(lid);
+  if(!forced){ pupX.t=yaw.t; pupY.t=pitch.t; step(pupX); step(pupY); }
+  toonA.t=toonOn?1:0; step(toonA);
   // glass follows the pose from LAG ms ago on a heavier, softer spring (eyes lead)
   if(hLen===HN){h0=(h0+1)%HN;hLen--;}
   const hi=(h0+hLen)%HN; hT[hi]=CK.simT; hY[hi]=yaw.x; hP[hi]=pitch.x; hLen++;
@@ -811,11 +892,13 @@ function tick(){            // one fixed 60 Hz step of the whole motion model
     if(CK.noiseT>=NT_WRAP){CK.noiseT-=NT_WRAP; CK.prevNT-=NT_WRAP;}   // seamless (periodic noise)
   }
 }
-const EYE={hw:.5,hh:.5,cap:.5,fade:.5,ex:.5,oy:.5,vtop:.5,ck:.5}, EYEB={hw:.5,hh:.5,cap:.5,fade:.5,ex:.5,oy:.5,vtop:.5,ck:.5}, EV3=new Float64Array(4), PA={x:.5,y:.5,z:.5}, PB={x:.5,y:.5,z:.5}, PJ=new Float64Array(8), EV=new Float64Array(2);
+const EYE={hw:.5,hh:.5,cap:.5,fade:.5,ex:.5,oy:.5,vtop:.5,ck:.5}, EYEB={hw:.5,hh:.5,cap:.5,fade:.5,ex:.5,oy:.5,vtop:.5,ck:.5}, EV3=new Float64Array(4), PA={x:.5,y:.5,z:.5}, PB={x:.5,y:.5,z:.5}, PJ=new Float64Array(8), EV=new Float64Array(2),
+      EYO={hw:.5,hh:.5,cap:.5,fade:.5,ex:.5,oy:.5,vtop:.5,ck:.5}, EYOB={hw:.5,hh:.5,cap:.5,fade:.5,ex:.5,oy:.5,vtop:.5,ck:.5},
+      TBOX={hw:.5,hh:.5,oy:.5}, TOPEN={hw:.5,hh:.5}, TK={rim:.5,pupil:.5,follow:.5}, TO={ox:.5,oy:.5,grow:.5,a:.5,b:.5,pin:.5,pu:.5,pv:.5};
 /* uniform staging: preallocated Float32Arrays + uniform*fv. Passing doubles straight to gl.uniform4f boxes
    each argument (a heap number per value per frame); writing into typed arrays doesn't allocate at all. */
 const F32=n=>new Float32Array(n);
-const vEyeA=F32(4), vShape=F32(4), vShapeT=F32(4), vShapeC=F32(4), vShadow=F32(4), vRot=F32(4), vFace=F32(4), vEyeP=F32(4), vEyeL=F32(4), vEyeR=F32(4), vEyeK=F32(4), vEyeK2=F32(4), vQ=F32(4),
+const vEyeA=F32(4), vShape=F32(4), vShapeT=F32(4), vShapeC=F32(4), vShadow=F32(4), vToon=F32(4), vToonR=F32(4), vPupil=F32(4), vPupilA=F32(4), vRot=F32(4), vFace=F32(4), vEyeP=F32(4), vEyeL=F32(4), vEyeR=F32(4), vEyeK=F32(4), vEyeK2=F32(4), vQ=F32(4),
       vFrost=F32(4), vPoolK=F32(4), vFringeK=F32(4), vMisc=F32(4), vTouch=F32(4), vNT=F32(1), vWarp=F32(1), mBody=F32(4),
       mBlob=[F32(4),F32(4),F32(4)], vBlobC=[F32(2),F32(2),F32(2)];
 const LOG2E=Math.LOG2E, gk=w=>-LOG2E/(w*w);                 // gauss(x,w)=exp2(x²·gk(w))
@@ -826,7 +909,13 @@ const blobR=(i,ph)=>i===0?56*(1+(ph-1)*.5):i===1?196*ph:52, BLOB_RX=[82,136,70];
 /* CK.alpha = a ∈ [0,1): how far into the next 60 Hz step this frame is → interpolated, so 120 Hz is smooth.
    Everything constant across the frame is computed here, not per pixel. No allocations (verified with
    the CDP heap sampler: see bench notes). */
+/* toon on (or still fading out) ↔ program variant; a rebuilt program needs its per-program uniforms again */
+function syncToonProg(){
+  const want=toonOn||toonA.x>.002;
+  if(want!==progToon&&!lost&&buildProg(want)){ resize(); applyCoat(state.name,state.dark,false); }
+}
 function pushUniforms(){
+  syncToonProg();
   const a=CK.alpha;
   const Y=at(yaw,a), P=at(pitch,a), gy=at(gYaw,a), gp=at(gPitch,a), Rl=at(roll,a);
   const cy=Math.cos(Y),sy=Math.sin(Y),cp=Math.cos(P),sp=Math.sin(P),cr=Math.cos(Rl),sr=Math.sin(Rl);
@@ -850,6 +939,19 @@ function pushUniforms(){
   const w=.8*T.eyeSoft+.4, ihw=1/Math.max(ehw,1e-4);
   // drop shadow: offset ≈7% and Gaussian width ≈10% of the eye width (reaches < offset+2σ ≈ 0.27·hw·RR,
   // well inside the capsule margin mg below, so it costs nothing outside the eyes' region)
+  // toon layer (face.js toonV): open boxes (lid 1) size the pupils so a blink/squint covers them
+  const ta=Math.max(0,Math.min(1,at(toonA,a))), tr=T.tRim&&ta>.002?ta:0, tp=T.tPupil&&ta>.002?ta:0;
+  vToon[0]=tr; vToon[1]=tp;
+  if(tr+tp>0){
+    EV3[1]=1; EV3[2]=SH.a; F.eyeShapeV(EYO,EV3); if(mt>0){ EV3[2]=SH.b; F.eyeShapeV(EYOB,EV3); } else { EYOB.hw=EYO.hw; EYOB.hh=EYO.hh; }
+    TBOX.hw=ehw; TBOX.hh=ehh; TBOX.oy=eoy; TOPEN.hw=EYO.hw+(EYOB.hw-EYO.hw)*mt; TOPEN.hh=EYO.hh+(EYOB.hh-EYO.hh)*mt;
+    TK.rim=T.rimK; TK.pupil=T.pupilK; TK.follow=T.pupilF;
+    F.toonV(TO,TBOX,TOPEN,at(pupX,a)/.5,at(pupY,a)/.34,TK);
+    vToon[2]=TO.grow; vToonR[0]=TO.ox; vToonR[1]=TO.oy; gl.uniform4fv(U.uToonR,vToonR);
+    vPupil[0]=TO.pin; vPupil[1]=TO.pu; vPupil[2]=TO.pv; gl.uniform4fv(U.uPupil,vPupil);
+    vPupilA[0]=TO.a; vPupilA[1]=TO.b; vPupilA[2]=1/TO.a; vPupilA[3]=1/TO.b; gl.uniform4fv(U.uPupilA,vPupilA);
+  }
+  gl.uniform4fv(U.uToon,vToon);
   vShadow[0]=T.eyeShadow; vShadow[1]=.14*ehw; vShadow[2]=gk(Math.max(.2*ehw*RR,.5)); gl.uniform4fv(U.uShadow,vShadow);
   /* tight bounding capsule per eye: the projected stadium axis (cap ends) + radius. Projection never
      enlarges distances (screen ≤ RR·angle), the meridian's bow is < 1u, the happy arc droops ≤ arc·hw,
@@ -857,7 +959,10 @@ function pushUniforms(){
   const lat0=SA.lat+(SB.lat-SA.lat)*mt+lift, mg=(1.5+2.4*(3.5+2.5*w))/.8;
   // capsule for any shape (and both during a morph): radius = widest half-width × the shape's ex
   const crad=Math.max(EYE.hw*EYE.ex,EYEB.hw*EYEB.ex), ccap=Math.max(0,Math.max(EYE.hh,EYEB.hh)-crad);
-  vEyeP[2]=efade; vEyeP[3]=(crad+arc*crad)*RR+1+mg; gl.uniform4fv(U.uEyeP,vEyeP);
+  vEyeP[2]=efade; vEyeP[3]=(crad+arc*crad)*RR+1+mg;
+  if(tr>0){ const reach=(Math.hypot(TO.ox,TO.oy)+TO.grow)*RR+2;   // toon rim pokes out ≤ ~.33·hw·rimK: grow the capsule if needed
+    if(reach>mg) vEyeP[3]+=reach-mg; }
+  gl.uniform4fv(U.uEyeP,vEyeP);
   PJ[0]=cy; PJ[1]=sy; PJ[2]=cp; PJ[3]=sp; PJ[4]=cr; PJ[5]=sr;
   for(let s2=-1;s2<=1;s2+=2){
     PJ[6]=s2*lonR; PJ[7]=lat0+eoy+ccap; F.projectV(PA,PJ); PJ[7]=lat0+eoy-ccap; F.projectV(PB,PJ);
@@ -944,6 +1049,13 @@ function buildDebug(){
   const el=document.createElement('label'); el.innerHTML='<span>eye shape</span><span></span><select id="dEyes"></select>';
   const sel=el.querySelector('select'); SHAPE_NAMES.forEach(n=>{const o=document.createElement('option');o.value=n;o.textContent=EYE_LABEL[n]||n;sel.appendChild(o);});
   sel.value=eyesName; sel.onchange=()=>setEyes(sel.value); dbg.appendChild(el);
+  const tl=document.createElement('label'); tl.className='chk'; tl.innerHTML='<span>toon eyes</span><input type="checkbox" id="dToon">';
+  tl.querySelector('input').checked=toonOn; tl.querySelector('input').onchange=e=>setToon(e.target.checked); dbg.appendChild(tl);
+  TOGGLES.forEach(([key,label])=>{
+    const l=document.createElement('label'); l.className='chk'; l.dataset.k=key;
+    l.innerHTML=`<span>${label}</span><input type="checkbox">`; const c=l.querySelector('input'); c.checked=!!T[key];
+    c.onchange=()=>{T[key]=c.checked?1:0; store.set(TUNE_KEY,JSON.stringify(T));}; dbg.appendChild(l);
+  });
   SLIDERS.forEach(([key,label,min,max,st])=>{
     const l=document.createElement('label');
     l.innerHTML=`<span>${label}</span><span></span><input type="range" min="${min}" max="${max}" step="${st}">`;
@@ -958,7 +1070,7 @@ function buildDebug(){
   dbg.appendChild(row);
   $('dReset').onclick=()=>{T=Object.assign({},TUNE_DEF);store.del(TUNE_KEY);buildDebug();needResize=true;};
   $('dCopy').onclick=()=>{
-    const txt=JSON.stringify(Object.assign({eyes:eyesName},T),null,2), btn=$('dCopy');
+    const txt=JSON.stringify(Object.assign({eyes:eyesName,toon:toonOn},T),null,2), btn=$('dCopy');
     const ok=()=>{btn.textContent='Copied ✓';setTimeout(()=>btn.textContent='Copy values',1200);};
     const legacy=()=>{
       const ta=document.createElement('textarea');ta.value=txt;ta.setAttribute('readonly','');ta.style.cssText='position:fixed;opacity:0';
@@ -1004,7 +1116,7 @@ function drive(steps){
 }
 /* test hook: trace(steps) runs the same scripted sim without drawing → per tick [breath, content, size, lid, yaw, pitch] */
 const trace=steps=>{stop(); const r=[]; driveSteps(steps,r); return JSON.stringify(r);};
-window.__astrid={drive,trace,snapLid:v=>snap(lid,v),setEyes,eyes:()=>({name:eyesName,a:SH.a,b:SH.b,t:shapeT.x}),pet:()=>({down:pet.down,content:pet.content,happy:happy.x,lid:lid.x,roll:roll.x,press:press.x,body:bodyA.x,breath:breath.x,revs:pet.revs.length,lastTickle:pet.lastTickle,simT:CK.simT,voice:Voice.stats()}),bench,get T(){return T},state:()=>state,pose:()=>({yaw:yaw.x,pitch:pitch.x,size:size.x,lid:lid.x,gYaw:gYaw.x,gPitch:gPitch.x}),fps:()=>fps,rscale:()=>rscale};
+window.__astrid={drive,trace,snapLid:v=>snap(lid,v),setEyes,setToon,toon:()=>({on:toonOn,a:toonA.x,px:pupX.x,py:pupY.x,yaw:yaw.x,pitch:pitch.x}),eyes:()=>({name:eyesName,a:SH.a,b:SH.b,t:shapeT.x}),pet:()=>({down:pet.down,content:pet.content,happy:happy.x,lid:lid.x,roll:roll.x,press:press.x,body:bodyA.x,breath:breath.x,revs:pet.revs.length,lastTickle:pet.lastTickle,simT:CK.simT,voice:Voice.stats()}),bench,get T(){return T},state:()=>state,pose:()=>({yaw:yaw.x,pitch:pitch.x,size:size.x,lid:lid.x,gYaw:gYaw.x,gPitch:gPitch.x}),fps:()=>fps,rscale:()=>rscale};
 })();
 </script>
 </body>

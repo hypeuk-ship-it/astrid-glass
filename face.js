@@ -153,5 +153,28 @@
     const d=(dR+(sdEllipse(x,y,hw,hh)-dR)*P.e)*g;
     return C?smax(d,v-C.vtop,C.ck):d;
   }
-  window.AstridFace=Object.freeze({SHAPES,eyeShapeV,eyeSDF,eyeSDFP,sdStadium,sdEgg,sdDot,sdOval,sdBean,sdSquircle,sdRef,CX,CY,RR,REST,projector,projectInto,projectV,stadiumOf,lidFade,eyePts,eyeUniforms,eyeInto,eyeV});
+  /* ---- toon layer (the drawing tutorial's eyes), for every shape ----
+     Rim: the white's SDF shifted up + outward and grown a touch, drawn BEHIND the white → only a crescent shows,
+     thick at the top-outer edge, tapering to nothing toward the bottom and the inner side (|offset| > grow).
+     Pupil: an upright dark oval ~43% of the eye's width × 63% of its height (open size, so a blink/squint
+     covers it instead of squashing it), resting a little inward and down, shifted toward the gaze, clipped by
+     the white. All radians, eye-local (u, v as eyeSDFP; side = −1 left, +1 right; inward = −side·u).
+     toonV(o, box, open, gx, gy, k) → o.ox, o.oy, o.grow (rim), o.a, o.b, o.pin, o.pu, o.pv (pupil).
+       box = current {hw, hh, oy}; open = the same shape at lid 1 {hw, hh}; gx, gy = pupil gaze in −1…1
+       (+x right, +y down, from the pupil spring); k = {rim, pupil, follow} slider factors (1 = default). */
+  const TOON={rimOut:.15, rimUp:.24, rimGrow:.05, pa:.43, pb:.63, pin:.17, pdown:.14, fu:.5, fv:.45};
+  function toonV(o,box,open,gx,gy,k){
+    const r=k.rim*box.hw; o.ox=TOON.rimOut*r; o.oy=TOON.rimUp*r; o.grow=TOON.rimGrow*r;
+    const hw0=Math.max(open.hw,1e-4), hh0=Math.max(open.hh,1e-4), sq=box.hh/hh0;   // sq: squash of a blink
+    o.a=TOON.pa*hw0*k.pupil; o.b=TOON.pb*hh0*k.pupil;
+    o.pin=TOON.pin*hw0;
+    o.pu=clamp(gx,-1,1)*k.follow*TOON.fu*Math.max(0,hw0-o.a);
+    o.pv=(box.oy||0)+(-TOON.pdown*hh0-clamp(gy,-1,1)*k.follow*TOON.fv*Math.max(0,hh0-o.b))*Math.min(1,sq);
+    return o;
+  }
+  // rim SDF (< 0 inside the dark shape; the visible crescent is where this is < 0 and the white's SDF is > 0)
+  function sdToonRim(u,v,hw,hh,side,P,C,T){ return eyeSDFP(u-side*T.ox,v-T.oy,hw,hh,side,P,C)-T.grow; }
+  // pupil SDF, already clipped by the white (dWhite = the white's SDF at the same point)
+  function sdPupil(u,v,side,T,dWhite){ return Math.max(sdEllipse(u+side*T.pin-T.pu,v-T.pv,T.a,T.b),dWhite); }
+  window.AstridFace=Object.freeze({SHAPES,eyeShapeV,eyeSDF,eyeSDFP,TOON,toonV,sdToonRim,sdPupil,sdStadium,sdEgg,sdDot,sdOval,sdBean,sdSquircle,sdRef,CX,CY,RR,REST,projector,projectInto,projectV,stadiumOf,lidFade,eyePts,eyeUniforms,eyeInto,eyeV});
 })();
