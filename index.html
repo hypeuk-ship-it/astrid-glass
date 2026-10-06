@@ -483,10 +483,10 @@ void main(){
   gl_Position = vec4(aPos, 0.0, 1.0);
 }
 </script>
-<script src="coats.js?v=10070055"></script>
-<script src="springs.js?v=10070055"></script>
-<script src="face.js?v=10070055"></script>
-<script src="emotes.js?v=10070055"></script>
+<script src="coats.js?v=10070070"></script>
+<script src="springs.js?v=10070070"></script>
+<script src="face.js?v=10070070"></script>
+<script src="emotes.js?v=10070070"></script>
 <script>
 (function(){
 'use strict';
@@ -959,7 +959,15 @@ function paintSheetBar(){
   paintEmoteBar();
 }
 paintSheetBar();
-if(EM&&EM.isEmote(eyesName)) applyEmoteMeta(EM.get(eyesName));
+if(EM&&sheetId&&emoteId){
+  const sh=EM.SHEETS.find(x=>x.id===sheetId), e=sh&&sh.emotes.find(x=>x.id===emoteId);
+  if(e){ eyesName=e.key; SH.a=SH.b=SHAPE_NAMES.indexOf(e.key); snap(shapeT,0); applyEmoteMeta(e);
+    document.querySelectorAll('.eyes button[data-e]').forEach(b=>b.setAttribute('aria-pressed','false'));
+    [...sheetBar.querySelectorAll('button')].forEach(x=>x.setAttribute('aria-pressed',String(x.dataset.sheet===sheetId)));
+    paintEmoteBar(); }
+  else if(EM.isEmote(eyesName)) applyEmoteMeta(EM.get(eyesName));
+  else clearMotif();
+} else if(EM&&EM.isEmote(eyesName)) applyEmoteMeta(EM.get(eyesName));
 else clearMotif();
 // wrap setEyes so picking a classic shape clears emote chrome; picking an emote applies meta
 const _setEyes=setEyes;
