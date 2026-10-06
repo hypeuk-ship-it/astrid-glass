@@ -38,10 +38,10 @@ uniform vec4  uRot;     // eyes: cos yaw, sin yaw, cos pitch, sin pitch
 uniform vec4  uEyeP;    // eyes: -, -, lidFade (morph-blended), capsule radius (units)
 uniform vec4  uEyeA;    // eye box (radians): half width, half visible height (morph-blended), 1/hw, 1/hh
 uniform vec4  uShape;   // eye shape params: corner radius ×hw, ellipse weight, egg taper, -
-uniform vec4  uShapeT;  // eye shape params: cos lean, sin lean, bean bow ×hw, -
+uniform vec4  uShapeT;  // eye shape params: cos lean, sin lean, bean bow ×hw, rest lon of the eyes (±)
 uniform vec4  uEyeL, uEyeR; // eyes: tight bounding capsules = projected stadium axis ends (a.xy, b.xy), screen units
 uniform vec4  uEyeK;    // eyes: soft edge w, glow k, aura k (exp2 factors), 1/hw
-uniform vec4  uEyeK2;   // eyes: 1/(2·hh), rim-shade edge (−0.7·hw·RR), lat centre (0.04+lift), arc/hw (morph-blended box)
+uniform vec4  uEyeK2;   // eyes: 1/(2·hh), rim-shade edge (−0.7·hw·RR), lat centre (shape rest lat + lift), arc/hw (morph-blended box)
 uniform vec4  uFace;    // cos roll, sin roll, -, -
 uniform vec4  uQ;       // head-turn map (inverted gaze + foreshorten): q = pl·xy + zw
 uniform mat2  uBA, uBB, uBC; // blobs (floor, pool, bloom): drift⁻¹ with 1/radii folded in
@@ -70,7 +70,8 @@ vec3 tint(vec3 col, vec3 c, float a){
 
 // ---- eye shapes: ONE parametric SDF in eye-local sphere coords (radians; < 0 inside), box b = (half w,
 // half h). Every shape is a parameter set (face.js SHAPES / eyeSDFP): stadium = rounded box with r = hw,
-// squircle r = .55hw, dot = round box, oval = ellipse, egg = tapered ellipse, bean = leaning bowed ellipse.
+// squircle r = .55hw, dot = round box, oval = ellipse, egg = tapered ellipse, bean = leaning bowed ellipse,
+// ref = plump (mostly ellipse) egg leaning outward, placed low and wide (rest lon/lat per shape).
 // A shape switch lerps the params on the CPU → no branches, one evaluation per tap, even mid-morph.
 float eyeSDF(vec2 p, vec2 b, float side){
   vec2 ib = uEyeA.zw;                                                     // 1/b (CPU)
@@ -89,7 +90,7 @@ float eyeSDF(vec2 p, vec2 b, float side){
 // eye shading for one chroma tap, given its sphere coordinates (lon, lat) and visible-hemisphere Z
 vec3 eyeTap(vec3 col, float lon, float lat, float Z){
   float side = lon < 0.0 ? -1.0 : 1.0;
-  float u = lon - 0.2 * side;
+  float u = lon - uShapeT.w * side;
   // happy: eyes lift a touch and bow into a soft ∩ (edges droop) — any shape, never flatter than round
   float v = lat - uEyeK2.z + uEyeK2.w * u * u;
   float d = eyeSDF(vec2(u, v), uEyeA.xy, side);                            // radians

@@ -55,27 +55,36 @@
      side = −1 for the screen-left eye, +1 for the right (bean mirrors).                                 */
   /* natural w, h (radians at size 1; eyes sit ±0.2 apart, so w ≤ ~.25) · ex = bounding half-width ×hw ·
      unified-SDF params (see eyeSDFP): r corner radius ×hw, e ellipse weight, taper (egg), tilt (rad, bean
-     lean inward), bend (×hw, bean bow). A morph lerps these params, so the shader runs ONE SDF per tap. */
+     lean inward; < 0 leans outward), bend (×hw, bean bow). Placement: lon, lat = rest eye centre on the
+     sphere (gaze still adds the head turn). Lid: amin = flattest allowed aspect (1 = may round off to a
+     circle; ≥ h/w = keep its own aspect, as 'ref' does), sq = how much a squint/blink shrinks it instead of squashing.
+     A morph lerps all of these, so the shader runs ONE SDF per tap and the eyes glide to the new spot. */
   const SHAPES=Object.freeze([
-    Object.freeze({name:'stadium', w:.23, h:.52, ex:1,    r:1,   e:0, taper:0,   tilt:0,    bend:0}),   // default pill
-    Object.freeze({name:'egg',     w:.24, h:.33, ex:1.2,  r:1,   e:1, taper:.17, tilt:0,    bend:0}),   // pebble, wider at the bottom
-    Object.freeze({name:'dot',     w:.24, h:.24, ex:1,    r:1,   e:0, taper:0,   tilt:0,    bend:0}),   // plain circle
-    Object.freeze({name:'oval',    w:.22, h:.42, ex:1,    r:1,   e:1, taper:0,   tilt:0,    bend:0}),   // smooth tall ellipse
-    Object.freeze({name:'bean',    w:.2,  h:.4,  ex:1.45, r:1,   e:1, taper:0,   tilt:.244, bend:.35}), // leaning kidney bean
-    Object.freeze({name:'squircle',w:.225,h:.245,ex:1.3,  r:.55, e:0, taper:0,   tilt:0,    bend:0})]); // soft rounded square
+    Object.freeze({name:'stadium', w:.23, h:.52, ex:1,    r:1,   e:0, taper:0,   tilt:0,    bend:0, lon:.2, lat:.04, amin:1, sq:.15}),   // default pill
+    Object.freeze({name:'egg',     w:.24, h:.33, ex:1.2,  r:1,   e:1, taper:.17, tilt:0,    bend:0, lon:.2, lat:.04, amin:1, sq:.15}),   // pebble, wider at the bottom
+    Object.freeze({name:'dot',     w:.24, h:.24, ex:1,    r:1,   e:0, taper:0,   tilt:0,    bend:0, lon:.2, lat:.04, amin:1, sq:.15}),   // plain circle
+    Object.freeze({name:'oval',    w:.22, h:.42, ex:1,    r:1,   e:1, taper:0,   tilt:0,    bend:0, lon:.2, lat:.04, amin:1, sq:.15}),   // smooth tall ellipse
+    Object.freeze({name:'bean',    w:.2,  h:.4,  ex:1.45, r:1,   e:1, taper:0,   tilt:.244, bend:.35, lon:.2, lat:.04, amin:1, sq:.15}), // leaning kidney bean
+    Object.freeze({name:'squircle',w:.225,h:.245,ex:1.3,  r:.55, e:0, taper:0,   tilt:0,    bend:0, lon:.2, lat:.04, amin:1, sq:.15}), // soft rounded square
+    // Reference (Henlo's image): big plump eggs (ellipse ⅔ + stadium ⅓, slight bottom taper), tops leaning
+    // ~22° OUTWARD on screen (measured −31°/+11° on a turned view; sphere curvature adds most of it, so the
+    // authored tilt is small), aspect ~1.4, set low and fairly close (gap ≈ half an eye width).
+    Object.freeze({name:'ref',     w:.54, h:.64, ex:1.2,  r:1,   e:.7, taper:.10, tilt:.06, bend:0, lon:.45, lat:-.50, amin:99, sq:.25})]);
   const LID0=REST.w/REST.h;               // lid at which the stadium reaches a circle (fade starts below it)
   /* Box for any shape. Lid/blink close it vertically: hh goes from the natural height to round (hh = hw)
      as lid goes 1 → LID0, then the eye fades (lidFade). For the stadium this is EXACTLY stadiumOf + lidFade
      (h·lid is linear and hits w at LID0). Shapes with little height to give (dot, squircle) shrink up to
      15% instead of squashing, so a happy squint still reads and nothing gets flatter than round.
+     'ref' (amin = its own aspect) never flattens at all: lid and squint shrink it up to 25% instead.
      v = [size, lid, shapeIndex]; writes o.hw, o.hh, o.cap (= hh − hw, the stadium cap), o.fade, o.ex. */
   function eyeShapeV(o,v){
     const S=SHAPES[v[2]|0]||SHAPES[0], s=Math.max(0,v[0]), l=Math.max(0,v[1]);
     let w=S.w*s; const h=S.h*s; if(h<w) w=h;
-    const k=Math.min(1,Math.max(0,(l-LID0)/(1-LID0)));                 // 1 open … 0 round
-    const room=Math.min(1,Math.max(0,1-(S.h/S.w-1)/(REST.h/REST.w-1)));  // 0 stadium … 1 dot
-    const shrink=1-.15*(1-k)*room;
-    o.hw=w/2*shrink; o.hh=(w+(h-w)*k)/2*shrink; o.cap=Math.max(0,o.hh-o.hw);
+    const k=Math.min(1,Math.max(0,(l-LID0)/(1-LID0)));                 // 1 open … 0 flattest allowed
+    const am=Math.min(h/Math.max(w,1e-9),S.amin), hmin=w*am;             // never flatter than amin
+    const room=Math.min(1,Math.max(0,1-(S.h/S.w-am)/(REST.h/REST.w-1)));  // 0 stadium … 1 no height to give
+    const shrink=1-S.sq*(1-k)*room;
+    o.hw=w/2*shrink; o.hh=(hmin+(h-hmin)*k)/2*shrink; o.cap=Math.max(0,o.hh-o.hw);
     o.fade=w<=0?0:(l>=LID0?1:Math.max(0,l/LID0)); o.ex=S.ex;
     return o;
   }
@@ -97,9 +106,17 @@
     return sdEllipse(x-side*.35*hw*(1-yn*yn),y,hw,hh);
   }
   // 5 squircle: rounded box, corner radius 0.55·hw
+  // 6 ref: plump egg, a bit wider at the bottom; placed low and wide (lon .45, lat −.5) so on the sphere
+  //   its top leans outward (left eye's top to the left) like Henlo's reference — params in SHAPES.ref
+  function sdRef(u,v,hw,hh,side){
+    const P=SHAPES[6], c=Math.cos(P.tilt), s=Math.sin(P.tilt);       // small; the outward lean on screen comes from the sphere
+    const x0=c*u+side*s*v, y=-side*s*u+c*v, yn=clamp(y/hh,-1,1), g=1-P.taper*yn, x=x0/g;
+    const cap=Math.max(0,hh-hw), dS=len(x,y-clamp(y,-cap,cap))-hw;   // stadium (rounded box, r = hw)
+    return (dS+(sdEllipse(x,y,hw,hh)-dS)*P.e)*g;                       // plump: mostly ellipse
+  }
   function sdSquircle(u,v,hw,hh){ const r=.55*hw, qx=Math.abs(u)-hw+r, qy=Math.abs(v)-hh+r;
     return len(Math.max(qx,0),Math.max(qy,0))+Math.min(Math.max(qx,qy),0)-r; }
-  const SDF=[sdStadium,sdEgg,sdDot,sdOval,sdBean,sdSquircle];
+  const SDF=[sdStadium,sdEgg,sdDot,sdOval,sdBean,sdSquircle,sdRef];
   function eyeSDF(id,u,v,hw,hh,side){ return (SDF[id|0]||sdStadium)(u,v,hw,hh,side); }
   /* The one the shader runs: every shape above is this function at its SHAPES params (checked in tests):
      lean + bow (bean) → taper (egg) → mix(rounded box with corner r·hw, ellipse, e). */
@@ -112,5 +129,5 @@
     const dR=len(Math.max(qx,0),Math.max(qy,0))+Math.min(Math.max(qx,qy),0)-r;
     return (dR+(sdEllipse(x,y,hw,hh)-dR)*P.e)*g;
   }
-  window.AstridFace=Object.freeze({SHAPES,eyeShapeV,eyeSDF,eyeSDFP,sdStadium,sdEgg,sdDot,sdOval,sdBean,sdSquircle,CX,CY,RR,REST,projector,projectInto,projectV,stadiumOf,lidFade,eyePts,eyeUniforms,eyeInto,eyeV});
+  window.AstridFace=Object.freeze({SHAPES,eyeShapeV,eyeSDF,eyeSDFP,sdStadium,sdEgg,sdDot,sdOval,sdBean,sdSquircle,sdRef,CX,CY,RR,REST,projector,projectInto,projectV,stadiumOf,lidFade,eyePts,eyeUniforms,eyeInto,eyeV});
 })();
