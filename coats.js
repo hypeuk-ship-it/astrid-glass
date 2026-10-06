@@ -17,12 +17,13 @@
   const rgb=h=>hx(h).map(v=>v/255);              // → [0..1] for uniforms
 
   function palette(name,dark){
+    /* 'glass' = Henlo's reference vibe: pale frosted white, sky-blue pool glowing up from the bottom */
     if(name==='glass') return dark
-      ? {paper:'#0b0d14',core:'#3d82f2',deep:'#1d4fb8',mid:'#5f86c8',edge:'#1a2236',halo:'#141b2c',eye:'#ffffff',eyeHi:'#ffffff',eyeLo:'#cfe0fb',glow:'#9cc4ff',shadow:'#000000',ink:'#9aa6bd',inner:.25,dark:1}
-      : {paper:'#e9e9eb',core:'#3d82f2',deep:'#2a63d6',mid:'#a3c5f8',edge:'#fbf8fe',halo:'#ffffff',eye:'#ffffff',eyeHi:'#ffffff',eyeLo:'#cfe0fb',glow:'#ffffff',shadow:'#2a3d66',ink:'#4a5568',inner:.55,dark:0};
+      ? {paper:'#0b0d14',core:'#3f86e8',deep:'#2a62c8',mid:'#5c8fd0',edge:'#1a2030',halo:'#161b29',eye:'#ffffff',eyeHi:'#ffffff',eyeLo:'#c6d8f2',glow:'#8fc0ff',shadow:'#000000',ink:'#9aa6bd',inner:0,dark:1}
+      : {paper:'#f1f1f1',core:'#76b4f1',deep:'#5a9fec',mid:'#a9d3f8',edge:'#ffffff',halo:'#ffffff',eye:'#ffffff',eyeHi:'#ffffff',eyeLo:'#d3e2f4',glow:'#eaf6ff',shadow:'#2a3d66',ink:'#5a6272',inner:0,dark:0};
     const c=COATS[name]||COATS.cream,i=dark?1:0,paper='#'+c.paper[i],orb='#'+c.orb[i],mark='#'+c.mark[i];
     const isDark=lum(paper)<.3;
-    const core=Math.abs(lum(orb)-lum(paper))<.08 ? mix(orb,mark,isDark?.16:.2) : mix(orb,mark,.1);
+    const core=Math.abs(lum(orb)-lum(paper))<.08 ? mix(orb,mark,isDark?.3:.2) : mix(orb,mark,.1);
     const edge=isDark?mix(paper,mark,.1):mix(paper,'#ffffff',.6);
     const mid=mix(core,edge,.45);
     return {paper,core,deep:mix(core,mark,.22),mid,edge,halo:isDark?mix(paper,mark,.07):'#ffffff',
@@ -31,7 +32,7 @@
             inner:isDark?.2:.55,dark:isDark?1:0};
   }
   /* swatch for the dot picker (same as v6) */
-  const swatch=n=>n==='glass'?'radial-gradient(circle at 50% 65%,#3d82f2,#cfe0fb)'
+  const swatch=n=>n==='glass'?'radial-gradient(circle at 50% 85%,#5598e8,#a6d0f7 55%,#ffffff)'
     :'#'+(COATS[n].orb[0]===COATS[n].paper[0]?COATS[n].mark[0]:COATS[n].orb[0]);
 
   window.AstridCoats={COATS,names:['glass',...Object.keys(COATS)],palette,swatch,mix,rgb,lum};

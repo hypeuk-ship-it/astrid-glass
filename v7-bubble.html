@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Astrid · glass</title>
+<title>Astrid · v7 bubble (WebGL, archived)</title>
 <style>
-  :root{--paper:#f1f1f1;--ink:#5a6272}
+  :root{--paper:#e9e9eb;--ink:#4a5568}
   html,body{margin:0;height:100%;background:var(--paper);overflow:hidden}
   body{display:grid;place-items:center;font:500 12px/1 -apple-system,"Instrument Sans",system-ui,sans-serif;color:var(--ink)}
   #gl{position:fixed;inset:0;width:100%;height:100%;display:block}
@@ -37,20 +37,16 @@
 
 <!-- Glass shader: inlined copy of glass.frag (run `python3 build.py` after editing glass.frag). -->
 <script type="x-shader/x-fragment" id="glass-frag">
-// Astrid glass · "vibe" (v8): soft, airy, washed-out. One fullscreen fragment pass, one draw call.
-// GLSL ES 1.00 (WebGL1/2). Units: AstridFace 240-space. Orb r118 at (120,120); stage framing -50..290.
-// Look (matches Henlo's reference): a white frosted form that bleeds into the paper with a Gaussian edge
-// (no outline, no glint), a pale luminous blue pool glowing up from the BOTTOM and fading to white haze
-// at the top, a faint pink/cyan prism smear only along the soft lower boundary, and big bright white
-// stadium "pebble" eyes with a slight RGB split and a faint inner shade.
+// Astrid glass — one fullscreen fragment pass, one draw call per frame. GLSL ES 1.00 (WebGL1/2).
+// Units: AstridFace 240-space. Orb r118 at (120,120); view framing -50..290 (340 units across the stage).
 // Layering (bottom → top):
-//   frost(p)  : paper · white bloom into the page · frosted body (Gaussian edge)      [fixed]
-//   pool(p)   : drifting blob field (pool, deep floor, bloom) moved by the delayed, inverted head turn,
-//               noise warp and random-target drift; inset so a frosted white margin stays around it
-//   haze      : white veil, heavier toward the top                                    [fixed]
-//   fringe    : pink outside / cyan inside where the pool meets the frosted margin, strongest low
-//   eyes      : soft blue-white glow + white pebble fill, sampled 3× (R/G/B) → gentle chromatic edge
-// Port note (Metal): uniforms map 1:1 to a constant buffer; plain functions; no textures.
+//   base(p)    : paper · contact shadow · halo · frosted shell (evaluated once)
+//   interior(p): inner-rim iridescence · drifting blob field (deep pool, core, bloom) · Fresnel ·
+//                eyes (glow + glossy fill) — clipped to the orb and sampled 3× (R/G/B) at slightly
+//                different radii → real refraction fringe, ~0 at the centre, growing ∝ r² to the rim.
+//   room light: sheen · crisp thin-film iridescent rim · inner white line · glint (never refracted,
+//               never moves with gaze).
+// Port note (Metal): uniforms map 1:1 to a constant buffer; base()/interior() → plain functions; no textures.
 #ifdef GL_FRAGMENT_PRECISION_HIGH
 precision highp float;
 #else
@@ -58,23 +54,21 @@ precision mediump float;
 #endif
 
 uniform vec3  uView;    // centre x,y (drawing-buffer px, GL origin bottom-left), units per px
-uniform vec3  uPaper, uCore, uDeep, uMid, uEdge, uHalo, uEye, uEyeHi, uEyeLo, uGlow;
-uniform vec2  uMode;    // x: unused (was inner line), y: dark (0/1)
+uniform vec3  uPaper, uCore, uDeep, uMid, uEdge, uHalo, uEye, uEyeHi, uEyeLo, uGlow, uShadow;
+uniform vec2  uMode;    // x: inner line opacity, y: dark (0/1)
 uniform vec4  uRot;     // eyes: cos yaw, sin yaw, cos pitch, sin pitch
 uniform vec4  uEyeP;    // eyes: stadium half-width (rad), cap half-length (rad), lidFade, reject radius (units)
 uniform vec4  uEyeC;    // eyes: projected screen centres (L.xy, R.xy) — cheap bounding reject only
 uniform vec4  uCoreM;   // glass head-turn: offset xy (units, inverted to gaze), foreshorten scale xy
-uniform mat2  uMA, uMB, uMC; // blob drift (floor, pool, bloom): inverse of rotate·scale (precomputed in JS)
+uniform mat2  uMA, uMB, uMC; // blob drift (core, pool, bloom): inverse of CSS rotate·scale (precomputed in JS)
 uniform vec2  uTA, uTB, uTC; // blob drift: drift origin (120,144.8) + translate (units)
 uniform float uNT;      // noise time (advanced by JS × drift speed)
-uniform vec4  uTune1;   // eye RGB split, edge softness, haze, pool height
-uniform vec4  uTune2;   // eye softness, fringe, noise warp (units), pool strength
+uniform vec4  uTune1;   // refraction, rim thickness (×1.5u), rim intensity, frost softness
+uniform vec4  uTune2;   // eye softness, glint, noise warp (units), -
 
 const vec2  C  = vec2(120.0, 120.0);
 const float R  = 118.0;   // orb
 const float RR = 110.0;   // eye sphere (AstridFace projector)
-const vec3  PINK = vec3(0.976, 0.620, 0.902);
-const vec3  CYAN = vec3(0.560, 0.905, 1.000);
 
 float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float vnoise(vec2 p){
@@ -82,14 +76,24 @@ float vnoise(vec2 p){
   return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
              mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
 }
-float gauss(float x, float w){ return exp(-(x*x) / (w*w)); }
+vec2 rot2(vec2 v, float a){ float c = cos(a), s = sin(a); return vec2(c*v.x - s*v.y, s*v.x + c*v.y); }
+// "blurred linear ramp": 1 at d=0 → 0 at d=1, softened by k at both ends
+float lin(float d, float k){ return 1.0 - smoothstep(-k, 1.0 + k, d); }
 
+// inverse of CSS `translate(t) rotate(r) scale(s)` about the drift origin O (same as v6 .drift):
+//   q_local = M⁻¹ (q − O − t) + O, with M⁻¹ and O+t precomputed per blob in JS (no trig per pixel)
 const vec2 DO = vec2(120.0, 144.8);
 vec2 undrift(vec2 q, mat2 m, vec2 ot){ return m * (q - ot) + DO; }
 
-// dark paper wants light added (screen), light paper wants a tint (mix)
-vec3 tint(vec3 col, vec3 c, float a){
-  return mix(mix(col, c, a), 1.0 - (1.0 - col) * (1.0 - c * a * 0.8), uMode.y);
+// iridescent thin-film ramp, cyclic: cyan → lavender → pink → peach → cyan
+vec3 iri(float t){
+  t = fract(t);
+  vec3 c0 = vec3(0.561, 0.890, 1.000), c1 = vec3(0.769, 0.651, 1.000),
+       c2 = vec3(1.000, 0.624, 0.878), c3 = vec3(1.000, 0.824, 0.651);
+  if (t < 0.28) return mix(c0, c1, smoothstep(0.0, 0.28, t));
+  if (t < 0.50) return mix(c1, c2, smoothstep(0.28, 0.50, t));
+  if (t < 0.75) return mix(c2, c3, smoothstep(0.50, 0.75, t));
+  return mix(c3, c0, smoothstep(0.75, 1.0, t));
 }
 
 // eyes: screen → sphere (r=RR) → undo yaw, pitch → lon/lat → analytic stadium (AstridFace.eyePath)
@@ -109,92 +113,140 @@ vec3 eyes(vec3 col, vec2 p){
   float hw = uEyeP.x, cap = uEyeP.y;
   float d  = length(vec2(u, v - clamp(v, -cap, cap))) - hw;   // radians
   float ds = d * RR * mix(Z, 1.0, 0.5);                       // ≈ screen units (foreshortened)
-  float w  = 0.8 * uTune2.x + 0.4;
+  float w  = 1.1 * uTune2.x + 0.3;
   float vis = uEyeP.z * smoothstep(0.02, 0.08, Z);            // lidFade · z>0.02 cull
-  // soft luminous glow: the pebble lights the haze around it a little
-  float glow = 0.26 * gauss(max(ds, 0.0), 4.0 + 3.0*w);
-  col = tint(col, uGlow, glow * vis);
-  // pool-coloured aura hugging the outline: keeps the pebbles reading when a glance carries them
-  // out over the white haze (on the blue pool it is nearly invisible)
-  col = mix(col, mix(uCore, uMid, 0.3), 0.42 * gauss(max(ds, 0.0) - 1.5, 3.5 + 2.5*w) * vis * (1.0 - uMode.y*0.4));
-  // pebble fill: bright top-right → white → faint shade lower-left, plus a soft inner edge shade
+  float glow = 0.36 * (1.0 - smoothstep(-1.0, 4.0 + 2.0*w, ds));
+  col = mix(col, uGlow, glow * vis);
+  // glossy fill: eyeHi → eye → eyeLo along (0.35, 1) in the stadium's own frame
   float uu = clamp(u / max(hw, 1e-4) * 0.5 + 0.5, 0.0, 1.0);
   float vv = clamp(0.5 - v / (2.0 * (cap + hw) + 1e-4), 0.0, 1.0);
-  float t  = clamp((0.45*(1.0 - uu) + vv) / 1.2, 0.0, 1.0);
-  vec3 ec  = t < 0.5 ? mix(uEyeHi, uEye, t / 0.5) : mix(uEye, uEyeLo, 0.55 * smoothstep(0.55, 1.0, t));
-  float rimShade = smoothstep(-hw * RR * 0.7, 0.0, ds) * smoothstep(0.3, 0.9, t);
-  ec = mix(ec, uEyeLo, 0.4 * rimShade);
+  float t  = clamp((0.35*uu + vv) / 1.1225, 0.0, 1.0);
+  vec3 ec  = t < 0.55 ? mix(uEyeHi, uEye, t / 0.55) : mix(uEye, uEyeLo, (t - 0.55) / 0.45);
   float fill = 1.0 - smoothstep(-w, w, ds);
   return mix(col, ec, fill * vis);
 }
+
+// outer layer (not refracted): paper · contact shadow · halo · frosted shell
+vec3 base(vec2 p, float r){
+  vec3 col = uPaper;
+  // contact shadow: she sits on the page
+  vec2 sd = (p - vec2(120.0, 252.0)) / vec2(88.0, 13.0);
+  col = mix(col, uShadow, 0.16 * exp(-dot(sd, sd) * 2.6));
+  // halo (trimmed)
+  col = mix(col, uHalo, 0.75 * (1.0 - smoothstep(112.0, 146.0, r)));
+  // frosted shell: radial mid → edge (static, centred low like v6 #body)
+  float bt = length(p - vec2(120.0, 146.0)) / 128.0;
+  vec3 m2 = mix(uMid, uEdge, 0.6);
+  vec3 body = bt < 0.55 ? uMid : (bt < 0.76 ? mix(uMid, m2, (bt - 0.55) / 0.21)
+                                            : mix(m2, uEdge, clamp((bt - 0.76) / 0.17, 0.0, 1.0)));
+  float bw = 9.0 * uTune1.w + 0.5;
+  return mix(col, body, 1.0 - smoothstep(R - bw, R + bw, r));
+}
+
+// inner-rim iridescence (sharp-ish band → refracted per channel)
+vec3 rimIri(vec3 col, vec2 p){
+  float r = length(p - C), rn = r / R;
+  float ia = rn < 0.8 ? 0.0 : (rn < 0.9 ? 0.22 * (rn - 0.8) / 0.1 : mix(0.22, 0.2, clamp((rn - 0.9) / 0.1, 0.0, 1.0)));
+  ia *= 1.3 * (1.0 - smoothstep(R - 0.8, R + 0.8, r));
+  float diag = ((p.x - 20.0) + (p.y - 20.0)) / 400.0;
+  vec3 pk = vec3(1.0, 0.624, 0.878), lv = vec3(0.769, 0.651, 1.0), cy = vec3(0.624, 0.902, 1.0);
+  vec3 ir = rn < 0.95 ? mix(pk, lv, clamp((rn - 0.9) / 0.05, 0.0, 1.0)) : mix(lv, cy, clamp((rn - 0.95) / 0.05, 0.0, 1.0));
+  vec3 ic = mix(ir, iri(diag + 0.1), 0.35);                   // v6 rimGlow ramp + a little position hue
+  vec3 icMix = mix(col, ic, ia);                              // light paper: tint
+  vec3 icScr = 1.0 - (1.0 - col) * (1.0 - ic * ia * 1.4);     // dark paper: screen (glow, not mud)
+  return mix(icMix, icScr, uMode.y);
+}
+
+// blob field + Fresnel (soft, ≥8u features)
+vec3 blobs(vec3 col, vec2 p, vec2 warp){
+  float r = length(p - C), rn = min(r / R, 1.0);
+  float clip = 1.0 - smoothstep(R - 0.8, R + 0.8, r);
+  float k = uTune1.w * 0.035 + 0.005;
+  // head-turn (inverted, foreshortened) → noise warp → per-blob random-target drift
+  vec2 q = (p - C - uCoreM.xy) / uCoreM.zw + C + warp;
+  vec2 qb = undrift(q, uMB, uTB);                            // deep pool (bottom)
+  float aB = 0.6 * lin(length(qb - vec2(120.0, 214.0)) / 110.9, k * 2.0);
+  col = mix(col, uDeep, aB * clip);
+  vec2 qa = undrift(q, uMA, uTA);                            // main core
+  float dA = length(qa - vec2(120.0, 146.0)) / 127.44;
+  vec3 c1 = mix(uCore, uMid, 0.4);
+  vec3 ca = dA < 0.3 ? mix(uCore, c1, dA / 0.3) : mix(c1, uMid, clamp((dA - 0.3) / 0.2, 0.0, 1.0));
+  float aA = (dA < 0.3 ? 1.0 : (dA < 0.5 ? mix(1.0, 0.6, (dA - 0.3) / 0.2) : 0.6))
+           * (1.0 - smoothstep(0.5 - k*2.0, 0.62 + k*2.0, dA));
+  col = mix(col, ca, aA * clip);
+  vec2 qc = undrift(q, uMC, uTC);                            // lighter bloom
+  float aC = 0.75 * lin(length((qc - vec2(91.7, 120.0)) / vec2(70.8, 56.6)), k * 3.0);
+  col = mix(col, mix(uCore, uMid, 0.6), aC * clip);
+  // Fresnel edge brightening
+  float fz = sqrt(max(0.0, 1.0 - rn*rn));
+  float fz1 = 1.0 - fz, fres = fz1 * fz1 * fz1;
+  return mix(col, mix(uEdge, vec3(1.0), mix(0.55, 0.1, uMode.y)), fres * mix(0.35, 0.5, uMode.y) * clip);
+}
+
+// interior, full order (rim iridescence · blobs · Fresnel · eyes) — used by CHROMA_FULL
+vec3 interior(vec3 col, vec2 p, vec2 warp){ return eyes(blobs(rimIri(col, p), p, warp), p); }
 
 void main(){
   vec2 f = gl_FragCoord.xy;
   vec2 p = C + vec2(f.x - uView.x, uView.y - f.y) * uView.z;
   vec2 d = p - C; float r = length(d);
-  float es = uTune1.y;
-  float low = (p.y - C.y) / R;                 // −1 top … +1 bottom
+  vec3 col;
 
-  // ---- frost: paper · white bloom · frosted body (all fixed; Gaussian edge, no outline) ----
-  vec3 col = uPaper;
-  float out_ = max(r - R + 4.0, 0.0);
-  col = mix(col, uHalo, 0.38 * gauss(out_, 10.0 * es + 3.0));
-  float body = 1.0 - smoothstep(R - 6.0*es - 1.0, R + 5.0*es + 1.0, r);
-  col = mix(col, uEdge, body);
-
-  if (r < R + 12.0) {
-    // ---- pool: head-turn (inverted, delayed) → noise warp → random-target drift ----
-    vec2 np = p * 0.016;
+  if (r < 150.0) {
+    // noise warp computed once per pixel (shared by the 3 chroma taps)
+    vec2 np = p * 0.018;
     vec2 warp = vec2(vnoise(np + vec2(uNT*0.11, uNT*0.05)) + 0.5*vnoise(np*2.1 + vec2(-uNT*0.07, uNT*0.09) + 3.7),
                      vnoise(np + vec2(7.1 - uNT*0.06, 2.3 + uNT*0.10)) + 0.5*vnoise(np*2.1 + vec2(uNT*0.08, -uNT*0.06) + 9.2)) - 0.75;
     warp *= uTune2.z;
-    vec2 q = (p - C - uCoreM.xy) / uCoreM.zw + C + warp;
-    float ph = uTune1.w;
-    // main pool: a broad dome rising from below the orb
-    vec2 qb = undrift(q, uMB, uTB);
-    float dP = length((qb - vec2(120.0, 222.0)) / vec2(136.0, 196.0 * ph));
-    float aP = 1.0 - smoothstep(0.48, 0.98, dP);
-    vec3  cP = mix(uMid, uCore, smoothstep(0.95, 0.55, dP));
-    // deeper floor (bottom, slightly off-centre)
-    vec2 qa = undrift(q, uMA, uTA);
-    float dA = length((qa - vec2(108.0, 186.0)) / vec2(82.0, 56.0 * mix(1.0, ph, 0.5)));
-    float aA = 0.55 * (1.0 - smoothstep(0.1, 1.0, dA));
-    // pale bloom that morphs through the upper pool
-    vec2 qc = undrift(q, uMC, uTC);
-    float dC = length((qc - vec2(140.0, 128.0)) / vec2(70.0, 52.0));
-    float aC = 0.45 * (1.0 - smoothstep(0.0, 1.0, dC));
-    // frosted margin: the pool never reaches the rim (sides wide, bottom thinner)
-    float inset = mix(30.0, 14.0, smoothstep(0.2, 0.95, low)) * es + 4.0;
-    float m = 1.0 - smoothstep(R - inset - 10.0*es, R - inset + 6.0*es + 2.0, r);
-    float pa = clamp(aP * uTune2.w, 0.0, 1.0);
-    vec3 pool = mix(uEdge, cP, pa);
-    pool = mix(pool, uDeep, aA * aP * uTune2.w);
-    pool = mix(pool, mix(uMid, uEdge, 0.35), aC * aP);
-    // backlit floor: just above the bottom margin the pool goes lighter + cyan (luminous, not muddy)
-    float lift = smoothstep(0.55, 0.95, low) * m;
-    pool = mix(pool, mix(uMid, CYAN, 0.45), 0.55 * lift * pa * (1.0 - uMode.y*0.5));
-    col = mix(col, pool, m * body);
-
-    // ---- haze: white veil, heavier toward the top (fixed) ----
-    float hz = uTune1.z * (0.06 + 0.70 * smoothstep(-0.38, -0.98, low));
-    col = mix(col, uEdge, clamp(hz, 0.0, 1.0) * body);
-
-    // ---- fringe: blurred prism smear where the blue meets the frosted margin, strongest low ----
-    float fr = uTune2.y * smoothstep(-0.35, 0.85, low) * (0.25 + 0.75 * clamp(pa * 1.6, 0.0, 1.0));
-    float rb = R - inset;                                       // pool boundary radius
-    float fw = 5.0 * es + 2.5;
-    col = tint(col, PINK, 0.44 * fr * gauss(r - (rb + 2.0), fw));
-    col = tint(col, CYAN, 0.30 * fr * gauss(r - (rb - 7.0), fw));
-    // faint outer smear on the paper just below the form's soft bottom edge
-    col = tint(col, PINK, 0.07 * uTune2.y * smoothstep(0.5, 1.0, low) * gauss(r - (R + 2.0), 4.0 + 3.0*es));
-
-    // ---- eyes: 3 taps (R/G/B) at slightly different positions → gentle chromatic edge ----
+    // chromatic refraction: R/G/B at different radii — 0 at centre, ∝ r² toward the rim
+    float rn = min(r / R, 1.0);
     vec2 dir = r > 1e-3 ? d / r : vec2(0.0);
-    vec2 off = (dir * (0.8 + 2.2 * min(r / R, 1.0)) + vec2(1.5, 0.0)) * uTune1.x * mix(1.0, 0.7, uMode.y);
-    col = vec3(eyes(col, p + off).r, eyes(col, p).g, eyes(col, p - off).b);
+    vec2 off = (dir * (0.45 + 6.5*rn*rn) + vec2(0.55, -0.18)) * uTune1.x * mix(1.0, 0.6, uMode.y);
+    vec3 b = base(p, r);
+    vec3 ii;
+#ifdef CHROMA_FULL
+    // reference path: whole interior sampled 3× (≈2× the cost; visually identical — blobs are ≥8u soft)
+    ii = vec3(interior(b, p - off, warp).r, interior(b, p, warp).g, interior(b, p + off, warp).b);
+#else
+    // fast path: the sharp layers (rim iridescence, eyes) are refracted per channel; the soft blob
+    // field is shared. Order differs from v6 only in that blobs sit above the inner-rim band.
+    vec3 rr = vec3(rimIri(b, p - off).r, rimIri(b, p).g, rimIri(b, p + off).b);
+    vec3 sm = blobs(rr, p, warp);
+    ii = vec3(eyes(sm, p - off).r, eyes(sm, p).g, eyes(sm, p + off).b);
+#endif
+    col = mix(b, ii, 1.0 - smoothstep(R - 0.8, R + 0.8, r));   // clip at the pixel, not the tap
+  } else {
+    col = base(p, r);
   }
 
-  col += (hash(f) - 0.5) / 255.0;   // dither (kills 8-bit banding in the soft gradients)
+  // ---- room light (fixed; not refracted, not moved by gaze) ----
+  float px = uView.z;
+  // sheen
+  float sh = length((p - vec2(100.0, 54.0)) / vec2(56.0, 24.0));
+  col = mix(col, vec3(1.0), 0.5 * (1.0 - smoothstep(0.0, 1.25, sh)));
+  // crisp thin-film rim: hue from position (pink→lavender→cyan→peach) + film phase across the band
+  float hwid = 0.75 * uTune1.y;
+  float band = (r - 117.6) / max(hwid, 1e-3);
+  float ring = clamp((hwid - abs(r - 117.6)) / px + 0.5, 0.0, 1.0);
+  float diag = ((p.x - 20.0) + (p.y - 20.0)) / 400.0;
+  float ang  = atan(d.y, d.x) / 6.2831853;
+  vec3 film  = iri(diag + 0.04 * sin(ang * 6.2831853 * 2.0) + 0.06 * band);
+  col = mix(col, film, ring * 0.9 * uTune1.z);
+  // outer iridescent bloom right at the rim (soft, very faint)
+  float ob = exp(-pow((r - 118.5) / (2.2 * uTune1.y), 2.0)) * (1.0 - ring);
+  col = mix(col, film, ob * 0.18 * uTune1.z);
+  // inner white line
+  float il = clamp((0.4 - abs(r - 115.8)) / px + 0.5, 0.0, 1.0);
+  col = mix(col, vec3(1.0), il * uMode.x);
+  // glint (top-left) + small dot
+  float gi = uTune2.y;
+  float ge = length(rot2(p - vec2(74.0, 44.0), 0.6283185) / vec2(13.0, 5.5));
+  col = mix(col, vec3(1.0), 0.92 * gi * (1.0 - smoothstep(0.78, 1.22, ge)));
+  float gd = length(p - vec2(92.0, 33.0));
+  col = mix(col, vec3(1.0), 0.8 * gi * (1.0 - smoothstep(1.1, 3.1, gd)));
+
+  // dither (kills 8-bit banding in the soft gradients)
+  col += (hash(f) - 0.5) / 255.0;
   gl_FragColor = vec4(col, 1.0);
 }
 </script>
@@ -202,9 +254,98 @@ void main(){
 attribute vec2 aPos;
 void main(){ gl_Position = vec4(aPos, 0.0, 1.0); }
 </script>
-<script src="coats.js"></script>
-<script src="springs.js"></script>
-<script src="face.js"></script>
+<script>/* inlined coats.js (v7 snapshot) */
+/* Astrid coats — read-only copy of ColorWay (EInkPalette.swift) desk paper / orb / mark, as [light, dark].
+   Plus the default 'glass' preset. palette() derives the shader colours (same logic as v6-svg.html).
+   Classic script (no modules) so index.html works from file://. Exposes window.AstridCoats. */
+(function(){
+  const COATS={
+    cream:    {paper:['faf8f3','14130f'],orb:['faf8f3','050505'],mark:['111111','faf8f3']},
+    carbon:   {paper:['08090c','08090c'],orb:['05060a','05060a'],mark:['c5ccd6','c5ccd6']},
+    sumi:     {paper:['e8f0e4','121310'],orb:['c5cbb8','121310'],mark:['1a1c16','e8f0e4']},
+    manila:   {paper:['f4ead0','1c150c'],orb:['e6c48a','1c150c'],mark:['1a2744','f0d8a8']},
+    cyanotype:{paper:['d6eef8','0a1822'],orb:['7eb3cc','0a1822'],mark:['003153','b8d4e4']},
+    violet:   {paper:['f0e5f9','160a22'],orb:['c9a0e4','08040e'],mark:['2b1548','e4c8f6']},
+  };
+  const hx=h=>{h=h.replace('#','');return [0,2,4].map(i=>parseInt(h.slice(i,i+2),16))};
+  const toHex=a=>'#'+a.map(v=>Math.round(Math.max(0,Math.min(255,v))).toString(16).padStart(2,'0')).join('');
+  const mix=(a,b,t)=>toHex(hx(a).map((v,i)=>v+(hx(b)[i]-v)*t));
+  const lum=h=>{const [r,g,b]=hx(h);return (.2126*r+.7152*g+.0722*b)/255};
+  const rgb=h=>hx(h).map(v=>v/255);              // → [0..1] for uniforms
+
+  function palette(name,dark){
+    if(name==='glass') return dark
+      ? {paper:'#0b0d14',core:'#3d82f2',deep:'#1d4fb8',mid:'#5f86c8',edge:'#1a2236',halo:'#141b2c',eye:'#ffffff',eyeHi:'#ffffff',eyeLo:'#cfe0fb',glow:'#9cc4ff',shadow:'#000000',ink:'#9aa6bd',inner:.25,dark:1}
+      : {paper:'#e9e9eb',core:'#3d82f2',deep:'#2a63d6',mid:'#a3c5f8',edge:'#fbf8fe',halo:'#ffffff',eye:'#ffffff',eyeHi:'#ffffff',eyeLo:'#cfe0fb',glow:'#ffffff',shadow:'#2a3d66',ink:'#4a5568',inner:.55,dark:0};
+    const c=COATS[name]||COATS.cream,i=dark?1:0,paper='#'+c.paper[i],orb='#'+c.orb[i],mark='#'+c.mark[i];
+    const isDark=lum(paper)<.3;
+    const core=Math.abs(lum(orb)-lum(paper))<.08 ? mix(orb,mark,isDark?.16:.2) : mix(orb,mark,.1);
+    const edge=isDark?mix(paper,mark,.1):mix(paper,'#ffffff',.6);
+    const mid=mix(core,edge,.45);
+    return {paper,core,deep:mix(core,mark,.22),mid,edge,halo:isDark?mix(paper,mark,.07):'#ffffff',
+            eye:mark,eyeHi:mix(mark,isDark?'#ffffff':edge,.3),eyeLo:mix(mark,core,.35),
+            glow:isDark?mix(mark,core,.4):'#ffffff',shadow:isDark?'#000000':mark,ink:mix(mark,paper,.3),
+            inner:isDark?.2:.55,dark:isDark?1:0};
+  }
+  /* swatch for the dot picker (same as v6) */
+  const swatch=n=>n==='glass'?'radial-gradient(circle at 50% 65%,#3d82f2,#cfe0fb)'
+    :'#'+(COATS[n].orb[0]===COATS[n].paper[0]?COATS[n].mark[0]:COATS[n].orb[0]);
+
+  window.AstridCoats={COATS,names:['glass',...Object.keys(COATS)],palette,swatch,mix,rgb,lum};
+})();
+</script>
+<script>/* inlined springs.js (v7 snapshot) */
+/* Velocity springs — same integrator as the Swift rig: v=(v+(t-x)*k)*d; x+=v.
+   Stepped at a fixed 60 Hz (see index.html) so feel is frame-rate independent.
+   Exposes window.AstridSprings. */
+(function(){
+  const spring=(x,k,d)=>({x,v:0,t:x,k,d});
+  const step=s=>{s.v=(s.v+(s.t-s.x)*s.k)*s.d; s.x+=s.v;};
+  /* time-scaled step (drift speed slider): k·s², d^s ≈ the same spring run s× faster */
+  const stepScaled=(s,speed)=>{
+    if(speed<1e-3){s.v=0;return;}
+    s.v=(s.v+(s.t-s.x)*s.k*speed*speed)*Math.pow(s.d,speed); s.x+=s.v;
+  };
+  const snap=(s,x)=>{s.x=s.t=x;s.v=0;};
+  window.AstridSprings={spring,step,stepScaled,snap};
+})();
+</script>
+<script>/* inlined face.js (v7 snapshot) */
+/* Exact port of AstridFace (Swift): projector(yaw,pitch,roll), stadiumOf, lidFade, eyePath.
+   CX=120 CY=120 RR=110, rest eyes lon ±0.2 lat 0.04, stadium w 0.23 h 0.52 (never flatter than a circle).
+   eyePts() is the literal 20-seg polygon port (z>0.02 cull) — kept for parity/debug overlay.
+   eyeUniforms() hands the same stadium to the shader, which inverts the projector per pixel
+   (screen → sphere → un-rotate → lon/lat) and evaluates the stadium analytically there.
+   Exposes window.AstridFace. */
+(function(){
+  const CX=120, CY=120, RR=110, REST={lon:.2, lat:.04, w:.23, h:.52};
+  function projector(yaw,pitch,roll){
+    const cp=Math.cos(pitch),sp=Math.sin(pitch),cy=Math.cos(yaw),sy=Math.sin(yaw),cr=Math.cos(roll),sr=Math.sin(roll);
+    return (lon,lat)=>{
+      let x=Math.cos(lat)*Math.sin(lon), y=Math.sin(lat), z=Math.cos(lat)*Math.cos(lon);
+      const y1=y*cp-z*sp; z=y*sp+z*cp; y=y1;
+      const x2=x*cy+z*sy; z=-x*sy+z*cy; x=x2;
+      return {x:CX+RR*(x*cr-y*sr), y:CY-RR*(x*sr+y*cr), z};
+    };
+  }
+  function stadiumOf(e){ const s=Math.max(0,e.s); let w=REST.w*s; const h=REST.h*s; if(h<w) w=h; return [w,h]; }
+  function lidFade(e){ const [w,h]=stadiumOf(e); if(w<=0) return 0; return e.lid*h<w ? Math.max(0,e.lid*h/w) : 1; }
+  function eyePts(e,xf){
+    const n=20,[w,h]=stadiumOf(e),vis=Math.max(w,h*e.lid),hw=w/2,hh=vis/2,r=hw,cap=Math.max(0,hh-r),c=Math.cos(e.rot),sn=Math.sin(e.rot),pts=[];
+    const add=(u,v)=>{const u2=u*c-v*sn,v2=u*sn+v*c,p=xf(e.lon+u2,e.lat+v2); if(p.z>.02) pts.push(p);};
+    for(let i=0;i<=n;i++){const a=Math.PI-(i/n)*Math.PI; add(hw*Math.cos(a),cap+r*Math.sin(a));}
+    for(let i=0;i<=n;i++){const a=-(i/n)*Math.PI; add(hw*Math.cos(a),-cap+r*Math.sin(a));}
+    return pts;
+  }
+  /* shader hand-off: same numbers eyePts() uses (hw, cap) + lidFade, both eyes share size/lid */
+  function eyeUniforms(size,lid){
+    const e={lon:REST.lon,lat:REST.lat,s:size,rot:0,lid:Math.max(0,lid)};
+    const [w,h]=stadiumOf(e), vis=Math.max(w,h*e.lid), hw=w/2, cap=Math.max(0,vis/2-hw);
+    return {hw,cap,fade:lidFade(e)};
+  }
+  window.AstridFace={CX,CY,RR,REST,projector,stadiumOf,lidFade,eyePts,eyeUniforms};
+})();
+</script>
 <script>
 (function(){
 'use strict';
@@ -215,7 +356,7 @@ const $=id=>document.getElementById(id);
 const Q=new URLSearchParams(location.search);
 
 /* ---------------- tuning (debug sliders) ---------------- */
-const TUNE_DEF={lag:110,gk:.022,gd:.72,follow:.8,dSpeed:1,dAmt:1,edge:1,haze:1,poolH:1,poolI:1,fringe:1,split:1,eyeScale:1.3,eyeSoft:1};
+const TUNE_DEF={lag:110,gk:.022,gd:.72,follow:.8,dSpeed:1,dAmt:1,refr:1,rimW:1,rimI:1,frost:1,eyeSoft:1,glint:1};
 const SLIDERS=[
   ['lag','glass lag (ms)',0,400,5],
   ['gk','glass spring k',.004,.12,.001],
@@ -223,17 +364,15 @@ const SLIDERS=[
   ['follow','gaze follow',0,1.6,.01],
   ['dSpeed','drift speed',0,4,.05],
   ['dAmt','drift amount',0,2.5,.05],
-  ['edge','edge softness',0,3,.05],
-  ['haze','haze amount',0,2,.05],
-  ['poolH','bottom-pool height',.4,1.8,.02],
-  ['poolI','pool strength',0,1.6,.05],
-  ['fringe','fringe strength',0,3,.05],
-  ['split','eye RGB split',0,3,.05],
-  ['eyeScale','eye size',.8,1.6,.01],
+  ['refr','refraction',0,3,.05],
+  ['rimW','rim thickness',.3,3,.05],
+  ['rimI','rim intensity',0,1.5,.05],
+  ['frost','frost softness',0,3,.05],
   ['eyeSoft','eye softness',0,3,.05],
+  ['glint','glint',0,1.5,.05],
 ];
 let T=Object.assign({},TUNE_DEF);
-try{Object.assign(T,JSON.parse(localStorage.getItem('astridTuneVibe')||'{}'))}catch(e){}
+try{Object.assign(T,JSON.parse(localStorage.getItem('astridTuneV7')||'{}'))}catch(e){}
 
 /* ---------------- WebGL ---------------- */
 const cv=$('gl');
@@ -251,7 +390,7 @@ gl.useProgram(prog);
 const buf=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,buf);
 gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);  // one fullscreen triangle
 gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0,2,gl.FLOAT,false,0,0);
-const U={}; ['uView','uPaper','uCore','uDeep','uMid','uEdge','uHalo','uEye','uEyeHi','uEyeLo','uGlow','uMode','uRot','uEyeP','uEyeC','uCoreM','uMA','uMB','uMC','uTA','uTB','uTC','uNT','uTune1','uTune2']
+const U={}; ['uView','uPaper','uCore','uDeep','uMid','uEdge','uHalo','uEye','uEyeHi','uEyeLo','uGlow','uShadow','uMode','uRot','uEyeP','uEyeC','uCoreM','uMA','uMB','uMC','uTA','uTB','uTC','uNT','uTune1','uTune2']
   .forEach(n=>U[n]=gl.getUniformLocation(prog,n));
 
 let W=0,H=0,dpr=1,rscale=1;   // rscale: adaptive render scale (only drops if a GPU can't hold ~55 fps)
@@ -278,7 +417,7 @@ function applyCoat(name,dark,persist){
   document.documentElement.style.setProperty('--ink',p.ink);
   const c3=(u,h)=>gl.uniform3fv(U[u],rgb(h));
   c3('uPaper',p.paper);c3('uCore',p.core);c3('uDeep',p.deep);c3('uMid',p.mid);c3('uEdge',p.edge);c3('uHalo',p.halo);
-  c3('uEye',p.eye);c3('uEyeHi',p.eyeHi);c3('uEyeLo',p.eyeLo);c3('uGlow',p.glow);
+  c3('uEye',p.eye);c3('uEyeHi',p.eyeHi);c3('uEyeLo',p.eyeLo);c3('uGlow',p.glow);c3('uShadow',p.shadow);
   gl.uniform2f(U.uMode,p.inner,p.dark);
   if(persist!==false) localStorage.setItem('astridCoat',JSON.stringify({name,dark}));
   document.querySelectorAll('.coats button[data-c]').forEach(b=>b.setAttribute('aria-pressed',b.dataset.c===name));
@@ -357,9 +496,9 @@ let noiseT=0; const m2=new Float32Array(4);
 function pushUniforms(){
   const cy=Math.cos(yaw.x),sy=Math.sin(yaw.x),cp=Math.cos(pitch.x),sp=Math.sin(pitch.x);
   gl.uniform4f(U.uRot,cy,sy,cp,sp);
-  const e=F.eyeUniforms(size.x*T.eyeScale,lid.x), xf=F.projector(yaw.x,pitch.x,0);   // pebble scale: stadiumOf still keeps it ≥ a circle
+  const e=F.eyeUniforms(size.x,lid.x), xf=F.projector(yaw.x,pitch.x,0);
   const cl=xf(-F.REST.lon,F.REST.lat), cr=xf(F.REST.lon,F.REST.lat);
-  gl.uniform4f(U.uEyeP,e.hw,e.cap,e.fade,(e.hw+e.cap)*RR+24+8*T.eyeSoft+4*T.split);
+  gl.uniform4f(U.uEyeP,e.hw,e.cap,e.fade,(e.hw+e.cap)*RR+12+4*T.eyeSoft);
   gl.uniform4f(U.uEyeC,cl.x,cl.y,cr.x,cr.y);
   // head turn: INVERTED to the gaze, foreshortened at the side
   const gsy=Math.sin(gYaw.x), gsp=Math.sin(gPitch.x), k=RR*T.follow;
@@ -374,8 +513,8 @@ function pushUniforms(){
     gl.uniform2f(bt[i],120+d.x.x*BOX,144.8+d.y.x*BOX);
   });
   gl.uniform1f(U.uNT,noiseT);
-  gl.uniform4f(U.uTune1,T.split,T.edge,T.haze,T.poolH);
-  gl.uniform4f(U.uTune2,T.eyeSoft,T.fringe,6*T.dAmt,T.poolI);
+  gl.uniform4f(U.uTune1,T.refr,T.rimW,T.rimI,T.frost);
+  gl.uniform4f(U.uTune2,T.eyeSoft,T.glint,6*T.dAmt,0);
 }
 
 /* ---------------- single rAF loop (paused when hidden) ---------------- */
@@ -402,20 +541,20 @@ document.addEventListener('visibilitychange',()=>document.hidden?stop():start())
 /* ---------------- debug panel ---------------- */
 const dbg=$('dbg'); let fpsEl=null;
 function buildDebug(){
-  dbg.innerHTML='<h4>ASTRID · VIBE <b id="fps">– fps</b></h4>';
+  dbg.innerHTML='<h4>ASTRID GLASS <b id="fps">– fps</b></h4>';
   SLIDERS.forEach(([key,label,min,max,st])=>{
     const l=document.createElement('label');
     l.innerHTML=`<span>${label}</span><span></span><input type="range" min="${min}" max="${max}" step="${st}">`;
     const inp=l.querySelector('input'), val=l.querySelectorAll('span')[1];
     const show=()=>{val.textContent=(+T[key]).toFixed(st<.01?3:st<1?2:0);};
     inp.value=T[key]; show();
-    inp.oninput=()=>{T[key]=+inp.value; show(); localStorage.setItem('astridTuneVibe',JSON.stringify(T));};
+    inp.oninput=()=>{T[key]=+inp.value; show(); localStorage.setItem('astridTuneV7',JSON.stringify(T));};
     l.dataset.k=key; dbg.appendChild(l);
   });
   const row=document.createElement('div'); row.className='row';
   row.innerHTML='<button id="dReset">Reset</button><button id="dCopy">Copy values</button>';
   dbg.appendChild(row);
-  $('dReset').onclick=()=>{T=Object.assign({},TUNE_DEF);localStorage.removeItem('astridTuneVibe');buildDebug();};
+  $('dReset').onclick=()=>{T=Object.assign({},TUNE_DEF);localStorage.removeItem('astridTuneV7');buildDebug();};
   $('dCopy').onclick=()=>{
     const txt=JSON.stringify(T,null,2), btn=$('dCopy');
     const ok=()=>{btn.textContent='Copied ✓';setTimeout(()=>btn.textContent='Copy values',1200);};
