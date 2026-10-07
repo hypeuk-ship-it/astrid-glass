@@ -60,6 +60,18 @@ uniform sampler2D uEyeAtlas; // Polly exact binary sprite atlas (R8, 1=inside)
 uniform vec4  uAtlas;  // x=emote index (−1=off), y=cols, z=rows, w=unused (binary)
 uniform vec4  uStampL; // screen-space L eye stamp: cx, cy, halfX, halfY (same space as vP/uEyeL)
 uniform vec4  uStampR; // screen-space R eye stamp
+// Polly 3-layer rig (polly-layer-atlas.png): per emote row 8 cells = L white-body, pupil, outline, core | R same
+uniform sampler2D uLayTex;
+uniform vec4  uLay;    // x = on (1/0), y = emote row, z = 1/atlas width, w = 1/atlas height (texels)
+uniform vec4  uLayC;   // x = cell w, y = cell h (texels), z = texels per radian (live), w = QA canvas height (device px; 0 = live)
+uniform vec4  uLayL;   // L eye: anchor (cell texels, y down) xy, pupil offset (texels, y down; gaze + containment) zw
+uniform vec4  uLayR;   // R eye: same
+uniform vec4  uLayQ;   // QA 1:1 blit: L cell origin xy, R cell origin zw (device px from the canvas top-left)
+uniform vec4  uLayML;  // L pupil sprite: centre xy (cell texels), inverse rotation·scale (cos θ / s, sin θ / s) zw
+uniform vec4  uLayMR;  // R pupil sprite: same
+uniform vec4  uLayH;   // highlight offset relative to the pupil (texels, y down): L xy, R zw
+uniform vec4  uLayB;   // closure (lid/blink): L pivot y, R pivot y (cell texels), vertical scale, ink fill 0..1
+uniform vec4  uLayD;   // x = texels per device px at Z = 1 (live), y = debug codes, z = QA scale (1 = 1:1 exact), w unused
 uniform vec4  uShadow;  // eye drop shadow: strength, lat offset down (rad), gauss k (exp2), -
 uniform vec4  uShapeC;  // eye lid (radians): egg-centre offset, lid line (rel. to centre), corner k, -
 uniform vec4  uEyeL, uEyeR; // eyes: tight bounding capsules = projected stadium axis ends (a.xy, b.xy), screen units
@@ -112,6 +124,66 @@ float atlasStamp(vec2 p, vec4 stamp, float side){
   float enc = texture2D(uEyeAtlas, uv).r; // 1 = inside (white)
   // negative inside for step(d,0) fill; uAtlas.w unused for binary (kept for compat)
   return (0.5 - enc) * min(hst.x, hst.y);
+}
+
+// ---- Polly layered sprites (back -> front): white body, coloured pupil/motif, pupil-core ink, highlight (the three
+// moving layers are clipped to the white), closure (lid/blink), outline ink (unclipped, on top). Atlas: 5 cells per
+// eye (white, pupil, core, highlight, outline, fringe) x L/R; RGB = reference colours, A = signed distance field
+// (texels, a = .5 + d / (2 * LAY_R)); the fringe cell is straight alpha (the pupil's own anti-aliasing, unmixed). Coverage = SDF edge at the current texel/px scale, so edges stay crisp at any size;
+// at the exact 1:1 QA pose (hard = 1) it is a step at .5 at texel centres = the reference masks bit for bit.
+// No derivatives / extensions (Metal-portable): the px scale comes in as a uniform.
+const float LAY_R = 4.0;
+const vec3 LAY_INK = vec3(0.0353, 0.0275, 0.0392);      // median reference ink (outline + core), closed-eye fill
+vec4 layTex(float col, vec2 t){
+  vec2 c = clamp(t, vec2(0.5), uLayC.xy - 0.5);
+  return texture2D(uLayTex, (vec2(col * uLayC.x, uLay.y * uLayC.y) + c) * uLay.zw);
+}
+float layCov(float a, float s, float hard){
+  return hard > 0.5 ? step(0.5, a) : clamp((a - 0.5) * (2.0 * LAY_R) / s + 0.5, 0.0, 1.0);
+}
+// closure: the whole eye stack squashes about the lower-lid pivot (blink / lid follow); sprites have no lid art
+vec2 layClose(vec2 t, float piv){ t.y = piv + (t.y - piv) / max(uLayB.z, 0.03); return t; }
+// pupil-sprite coords: gaze offset po, rotation/scale M about the pupil centre
+vec2 layPup(vec2 t, vec2 po, vec4 M){ vec2 v = t - po - M.xy; return M.xy + vec2(M.z * v.x + M.w * v.y, -M.w * v.x + M.z * v.y); }
+// one eye at cell coords t (closure applied by the caller) -> interior colour (white + moving layers + closure ink);
+// ab = body coverage, ao / oc = outline coverage / colour, mv = visible moving-layer coverage (after the clip to the
+// white and under the outline), mp = moving coverage before the clip (debug / QA leak check)
+vec3 layEye(vec2 t, vec4 E, vec4 M, vec2 rel, float c0, float s, float hard, out float ab, out float ao, out vec3 oc, out float mv, out float mp){
+  vec4 wb = layTex(c0, t);
+  ab = layCov(wb.a, s, hard);
+  vec3 col = wb.rgb;
+  vec2 tp = layPup(t, E.zw, M);
+  vec4 fr = layTex(c0 + 5.0, tp); col = mix(col, fr.rgb, fr.a);     // pupil AA fringe (moves with the pupil)
+  vec4 pp = layTex(c0 + 1.0, tp); float ap = layCov(pp.a, s, hard); col = mix(col, pp.rgb, ap);
+  vec4 kc = layTex(c0 + 2.0, tp); float ak = layCov(kc.a, s, hard); col = mix(col, kc.rgb, ak);
+  vec4 hh = layTex(c0 + 3.0, layPup(t - rel, E.zw, M)); float ah = layCov(hh.a, s, hard) * ap;   // clipped to the pupil
+  col = mix(col, hh.rgb, ah);
+  col = mix(col, LAY_INK, uLayB.w);                                  // closed frame: the squashed eye reads as ink
+  vec4 ol = layTex(c0 + 4.0, t); ao = layCov(ol.a, s, hard); oc = ol.rgb;
+  mp = max(max(ap, ak), ah); mv = mp * ab * (1.0 - ao);
+  return col;
+}
+// QA: 1:1 device-px blit of the rig's layer composite on a grey page (uLayD.z > 1: magnified, smooth SDF edges)
+vec3 layQA(vec3 col){
+  vec2 fp = vec2(gl_FragCoord.x, uLayC.w - gl_FragCoord.y);
+  float k = max(uLayD.z, 1.0), hard = k > 1.0 ? 0.0 : 1.0;
+  vec3 dbg = vec3(0.0);
+  for (int i = 0; i < 2; i++) {
+    vec2 o = i == 0 ? uLayQ.xy : uLayQ.zw;
+    vec4 E = i == 0 ? uLayL : uLayR;
+    vec4 M = i == 0 ? uLayML : uLayMR;
+    vec2 rel = i == 0 ? uLayH.xy : uLayH.zw;
+    float piv = i == 0 ? uLayB.x : uLayB.y;
+    float c0 = i == 0 ? 0.0 : 6.0;
+    vec2 t = hard > 0.5 ? floor(fp - o) + 0.5 : (fp - o) / k;
+    if (t.x < 0.0 || t.y < 0.0 || t.x > uLayC.x || t.y > uLayC.y) continue;
+    t = layClose(t, piv);
+    float ab, ao, mv, mp; vec3 oc;
+    vec3 ci = layEye(t, E, M, rel, c0, 1.0 / k, hard, ab, ao, oc, mv, mp);
+    col = mix(mix(col, ci, ab), oc, ao);
+    dbg = max(dbg, uLayD.y > 1.5 ? vec3(ab, mv, ao) : vec3(ab, mv, mp * (1.0 - ao)));   // 1: leak codes, 2: outline
+  }
+  return uLayD.y > 0.5 ? dbg : col;
 }
 
 // ---- eye shapes: ONE parametric SDF in eye-local sphere coords (radians; < 0 inside), box b = (half w,
@@ -289,6 +361,31 @@ float sdAngerMark(vec2 p, float side, vec2 b, float n){
 }
 
 // eye shading for one chroma tap, given its sphere coordinates (lon, lat) and visible-hemisphere Z
+// Polly layered sprites (live path): cell texel coords of a sphere point (same eye-local u, v as eyeTap), closure
+// applied; c0 = the eye's first atlas column
+vec2 layT(float lon, float lat, out float c0, out vec4 E, out vec4 M, out vec2 rel){
+  float side = lon < 0.0 ? -1.0 : 1.0;
+  float u = lon - uShapeT.w * side;
+  float v = lat - uEyeK2.z + uEyeK2.w * u * u;
+  c0 = side > 0.0 ? 6.0 : 0.0; E = side > 0.0 ? uLayR : uLayL; M = side > 0.0 ? uLayMR : uLayML;
+  rel = side > 0.0 ? uLayH.zw : uLayH.xy;
+  return layClose(E.xy + vec2(u, -(v - uShapeC.x)) * uLayC.z, side > 0.0 ? uLayB.y : uLayB.x);
+}
+float layBodyA(float lon, float lat, float s){ float c0; vec4 E, M; vec2 rel; vec2 t = layT(lon, lat, c0, E, M, rel);
+  return layCov(layTex(c0, t).a, s, 0.0); }
+// sprite colours on the sphere: the whole stack comes from the centre tap (all three channels); only the body's own
+// edge keeps the glass RGB split (the side taps' body coverage), so sprite detail never gets colour fringes.
+vec3 layEyes(vec3 col, float lon, float lat, float Z, vec3 dl){
+  float c0; vec4 E, M; vec2 rel; vec2 t = layT(lon, lat, c0, E, M, rel);
+  float vl = uEyeP.z * smoothstep(0.02, 0.08, Z);
+  float s = uLayD.x / ((0.5 * Z + 0.5) * max(min(uLayB.z, 1.0), 0.03));   // texels per px (foreshortened, squashed)
+  float ab, ao, mv, mp; vec3 oc;
+  vec3 ci = layEye(t, E, M, rel, c0, s, 0.0, ab, ao, oc, mv, mp);
+  float aR = layBodyA(lon + dl.x, lat + dl.y, s), aB = layBodyA(lon - dl.x, lat - dl.y, s);
+  vec3 c = vec3(mix(col.r, ci.r, aR), mix(col.g, ci.g, ab), mix(col.b, ci.b, aB));
+  c = mix(c, oc, ao);
+  return mix(col, c, vl);
+}
 vec3 eyeTap(vec3 col, float lon, float lat, float Z, float rimA, float pc){
   float side = lon < 0.0 ? -1.0 : 1.0;
   float u = lon - uShapeT.w * side;
@@ -362,6 +459,7 @@ vec3 eyeTap(vec3 col, float lon, float lat, float Z, float rimA, float pc){
 // falloff, multiplied toward the deep pool colour → a darker, bluer band hugging the eye's lower edges.
 // Once per pixel (centre tap, before the fill), only inside the eye capsules; follows gaze, lid and fade.
 vec3 eyeShadow(vec3 col, float lon, float lat, float Z){
+  if (uLay.x > 0.5) return col;                               // Polly layers: the ink outline does that job
   float side = lon < 0.0 ? -1.0 : 1.0;
   float u = lon - uShapeT.w * side;
   float v = lat - uEyeK2.z + uEyeK2.w * u * u + uShadow.y;
@@ -416,6 +514,8 @@ vec3 eyes(vec3 col, vec2 p, vec2 off){
   // toon variant (compiled only while the toon layer is on: '#define TOON' is prepended by index.html)
   float rimA = 0.0;                                            // ≥ 0 on the centre tap, ≤ 0 on the side taps
   if (uQA < 0.5 && uToon.x > 0.0) { rimA = eyeRim(lon, lat, Z); col = mix(col, uToonCol, rimA); }
+  // Polly layers first, then brows (stroke) and FX (anger marks, blush) on top of them (layer order)
+  if (uLay.x > 0.5) col = layEyes(col, lon, lat, Z, dl);
   // emote stroke brows (arched tapered capsules + dark outline) + anger marks + soft blush
   if (uQA < 0.5 && uMotif.z > 0.0) {
     float side = lon < 0.0 ? -1.0 : 1.0;
@@ -446,12 +546,14 @@ vec3 eyes(vec3 col, vec2 p, vec2 off){
     float bv = uEyeP.z * smoothstep(0.02, 0.08, Z) * exp(-bd*bd*2.5) * .55;
     col = mix(col, vec3(.95,.35,.55), bv * uMotif.w);
   }
+  if (uLay.x > 0.5) return col;
   gCovP = 0.0; gFillMax = 0.0; gPupilCol = uToonCol;
   float cg = eyeTap(col, lon, lat, Z, rimA, 1.0).g;            // centre tap (also the pupil)
   vec3 c = vec3(eyeTap(col, lon + dl.x, lat + dl.y, Z + dl.z, -rimA, 0.0).r, cg,
                 eyeTap(col, lon - dl.x, lat - dl.y, Z - dl.z, -rimA, 0.0).b);   // side taps skip the pupil
   return mix(c, gPupilCol, gCovP * gFillMax);
 #else
+  if (uLay.x > 0.5) return layEyes(col, lon, lat, Z, dl);
   return vec3(eyeTap(col, lon + dl.x, lat + dl.y, Z + dl.z, 0.0, 0.0).r,
               eyeTap(col, lon, lat, Z, 0.0, 0.0).g,
               eyeTap(col, lon - dl.x, lat - dl.y, Z - dl.z, 0.0, 0.0).b);
@@ -465,6 +567,7 @@ void main(){
   float dith = (dhash(mod(f, 64.0)) - 0.5) / 255.0;     // dither (kills 8-bit banding)
 
   // QA silhouette: black page, solid white eye fills (cut SDF) — for IoU vs ref masks
+  if (uQA > 0.5 && uLay.x > 0.5) { gl_FragColor = vec4(layQA(vec3(136.0 / 255.0)), 1.0); return; }
   if (uQA > 0.5) {
     vec3 col = vec3(0.0);
     if (uAtlas.x > -0.5) {

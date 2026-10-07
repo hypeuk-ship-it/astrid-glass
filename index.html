@@ -125,6 +125,18 @@ uniform sampler2D uEyeAtlas; // Polly exact binary sprite atlas (R8, 1=inside)
 uniform vec4  uAtlas;  // x=emote index (−1=off), y=cols, z=rows, w=unused (binary)
 uniform vec4  uStampL; // screen-space L eye stamp: cx, cy, halfX, halfY (same space as vP/uEyeL)
 uniform vec4  uStampR; // screen-space R eye stamp
+// Polly 3-layer rig (polly-layer-atlas.png): per emote row 8 cells = L white-body, pupil, outline, core | R same
+uniform sampler2D uLayTex;
+uniform vec4  uLay;    // x = on (1/0), y = emote row, z = 1/atlas width, w = 1/atlas height (texels)
+uniform vec4  uLayC;   // x = cell w, y = cell h (texels), z = texels per radian (live), w = QA canvas height (device px; 0 = live)
+uniform vec4  uLayL;   // L eye: anchor (cell texels, y down) xy, pupil offset (texels, y down; gaze + containment) zw
+uniform vec4  uLayR;   // R eye: same
+uniform vec4  uLayQ;   // QA 1:1 blit: L cell origin xy, R cell origin zw (device px from the canvas top-left)
+uniform vec4  uLayML;  // L pupil sprite: centre xy (cell texels), inverse rotation·scale (cos θ / s, sin θ / s) zw
+uniform vec4  uLayMR;  // R pupil sprite: same
+uniform vec4  uLayH;   // highlight offset relative to the pupil (texels, y down): L xy, R zw
+uniform vec4  uLayB;   // closure (lid/blink): L pivot y, R pivot y (cell texels), vertical scale, ink fill 0..1
+uniform vec4  uLayD;   // x = texels per device px at Z = 1 (live), y = debug codes, z = QA scale (1 = 1:1 exact), w unused
 uniform vec4  uShadow;  // eye drop shadow: strength, lat offset down (rad), gauss k (exp2), -
 uniform vec4  uShapeC;  // eye lid (radians): egg-centre offset, lid line (rel. to centre), corner k, -
 uniform vec4  uEyeL, uEyeR; // eyes: tight bounding capsules = projected stadium axis ends (a.xy, b.xy), screen units
@@ -177,6 +189,66 @@ float atlasStamp(vec2 p, vec4 stamp, float side){
   float enc = texture2D(uEyeAtlas, uv).r; // 1 = inside (white)
   // negative inside for step(d,0) fill; uAtlas.w unused for binary (kept for compat)
   return (0.5 - enc) * min(hst.x, hst.y);
+}
+
+// ---- Polly layered sprites (back -> front): white body, coloured pupil/motif, pupil-core ink, highlight (the three
+// moving layers are clipped to the white), closure (lid/blink), outline ink (unclipped, on top). Atlas: 5 cells per
+// eye (white, pupil, core, highlight, outline, fringe) x L/R; RGB = reference colours, A = signed distance field
+// (texels, a = .5 + d / (2 * LAY_R)); the fringe cell is straight alpha (the pupil's own anti-aliasing, unmixed). Coverage = SDF edge at the current texel/px scale, so edges stay crisp at any size;
+// at the exact 1:1 QA pose (hard = 1) it is a step at .5 at texel centres = the reference masks bit for bit.
+// No derivatives / extensions (Metal-portable): the px scale comes in as a uniform.
+const float LAY_R = 4.0;
+const vec3 LAY_INK = vec3(0.0353, 0.0275, 0.0392);      // median reference ink (outline + core), closed-eye fill
+vec4 layTex(float col, vec2 t){
+  vec2 c = clamp(t, vec2(0.5), uLayC.xy - 0.5);
+  return texture2D(uLayTex, (vec2(col * uLayC.x, uLay.y * uLayC.y) + c) * uLay.zw);
+}
+float layCov(float a, float s, float hard){
+  return hard > 0.5 ? step(0.5, a) : clamp((a - 0.5) * (2.0 * LAY_R) / s + 0.5, 0.0, 1.0);
+}
+// closure: the whole eye stack squashes about the lower-lid pivot (blink / lid follow); sprites have no lid art
+vec2 layClose(vec2 t, float piv){ t.y = piv + (t.y - piv) / max(uLayB.z, 0.03); return t; }
+// pupil-sprite coords: gaze offset po, rotation/scale M about the pupil centre
+vec2 layPup(vec2 t, vec2 po, vec4 M){ vec2 v = t - po - M.xy; return M.xy + vec2(M.z * v.x + M.w * v.y, -M.w * v.x + M.z * v.y); }
+// one eye at cell coords t (closure applied by the caller) -> interior colour (white + moving layers + closure ink);
+// ab = body coverage, ao / oc = outline coverage / colour, mv = visible moving-layer coverage (after the clip to the
+// white and under the outline), mp = moving coverage before the clip (debug / QA leak check)
+vec3 layEye(vec2 t, vec4 E, vec4 M, vec2 rel, float c0, float s, float hard, out float ab, out float ao, out vec3 oc, out float mv, out float mp){
+  vec4 wb = layTex(c0, t);
+  ab = layCov(wb.a, s, hard);
+  vec3 col = wb.rgb;
+  vec2 tp = layPup(t, E.zw, M);
+  vec4 fr = layTex(c0 + 5.0, tp); col = mix(col, fr.rgb, fr.a);     // pupil AA fringe (moves with the pupil)
+  vec4 pp = layTex(c0 + 1.0, tp); float ap = layCov(pp.a, s, hard); col = mix(col, pp.rgb, ap);
+  vec4 kc = layTex(c0 + 2.0, tp); float ak = layCov(kc.a, s, hard); col = mix(col, kc.rgb, ak);
+  vec4 hh = layTex(c0 + 3.0, layPup(t - rel, E.zw, M)); float ah = layCov(hh.a, s, hard) * ap;   // clipped to the pupil
+  col = mix(col, hh.rgb, ah);
+  col = mix(col, LAY_INK, uLayB.w);                                  // closed frame: the squashed eye reads as ink
+  vec4 ol = layTex(c0 + 4.0, t); ao = layCov(ol.a, s, hard); oc = ol.rgb;
+  mp = max(max(ap, ak), ah); mv = mp * ab * (1.0 - ao);
+  return col;
+}
+// QA: 1:1 device-px blit of the rig's layer composite on a grey page (uLayD.z > 1: magnified, smooth SDF edges)
+vec3 layQA(vec3 col){
+  vec2 fp = vec2(gl_FragCoord.x, uLayC.w - gl_FragCoord.y);
+  float k = max(uLayD.z, 1.0), hard = k > 1.0 ? 0.0 : 1.0;
+  vec3 dbg = vec3(0.0);
+  for (int i = 0; i < 2; i++) {
+    vec2 o = i == 0 ? uLayQ.xy : uLayQ.zw;
+    vec4 E = i == 0 ? uLayL : uLayR;
+    vec4 M = i == 0 ? uLayML : uLayMR;
+    vec2 rel = i == 0 ? uLayH.xy : uLayH.zw;
+    float piv = i == 0 ? uLayB.x : uLayB.y;
+    float c0 = i == 0 ? 0.0 : 6.0;
+    vec2 t = hard > 0.5 ? floor(fp - o) + 0.5 : (fp - o) / k;
+    if (t.x < 0.0 || t.y < 0.0 || t.x > uLayC.x || t.y > uLayC.y) continue;
+    t = layClose(t, piv);
+    float ab, ao, mv, mp; vec3 oc;
+    vec3 ci = layEye(t, E, M, rel, c0, 1.0 / k, hard, ab, ao, oc, mv, mp);
+    col = mix(mix(col, ci, ab), oc, ao);
+    dbg = max(dbg, uLayD.y > 1.5 ? vec3(ab, mv, ao) : vec3(ab, mv, mp * (1.0 - ao)));   // 1: leak codes, 2: outline
+  }
+  return uLayD.y > 0.5 ? dbg : col;
 }
 
 // ---- eye shapes: ONE parametric SDF in eye-local sphere coords (radians; < 0 inside), box b = (half w,
@@ -354,6 +426,31 @@ float sdAngerMark(vec2 p, float side, vec2 b, float n){
 }
 
 // eye shading for one chroma tap, given its sphere coordinates (lon, lat) and visible-hemisphere Z
+// Polly layered sprites (live path): cell texel coords of a sphere point (same eye-local u, v as eyeTap), closure
+// applied; c0 = the eye's first atlas column
+vec2 layT(float lon, float lat, out float c0, out vec4 E, out vec4 M, out vec2 rel){
+  float side = lon < 0.0 ? -1.0 : 1.0;
+  float u = lon - uShapeT.w * side;
+  float v = lat - uEyeK2.z + uEyeK2.w * u * u;
+  c0 = side > 0.0 ? 6.0 : 0.0; E = side > 0.0 ? uLayR : uLayL; M = side > 0.0 ? uLayMR : uLayML;
+  rel = side > 0.0 ? uLayH.zw : uLayH.xy;
+  return layClose(E.xy + vec2(u, -(v - uShapeC.x)) * uLayC.z, side > 0.0 ? uLayB.y : uLayB.x);
+}
+float layBodyA(float lon, float lat, float s){ float c0; vec4 E, M; vec2 rel; vec2 t = layT(lon, lat, c0, E, M, rel);
+  return layCov(layTex(c0, t).a, s, 0.0); }
+// sprite colours on the sphere: the whole stack comes from the centre tap (all three channels); only the body's own
+// edge keeps the glass RGB split (the side taps' body coverage), so sprite detail never gets colour fringes.
+vec3 layEyes(vec3 col, float lon, float lat, float Z, vec3 dl){
+  float c0; vec4 E, M; vec2 rel; vec2 t = layT(lon, lat, c0, E, M, rel);
+  float vl = uEyeP.z * smoothstep(0.02, 0.08, Z);
+  float s = uLayD.x / ((0.5 * Z + 0.5) * max(min(uLayB.z, 1.0), 0.03));   // texels per px (foreshortened, squashed)
+  float ab, ao, mv, mp; vec3 oc;
+  vec3 ci = layEye(t, E, M, rel, c0, s, 0.0, ab, ao, oc, mv, mp);
+  float aR = layBodyA(lon + dl.x, lat + dl.y, s), aB = layBodyA(lon - dl.x, lat - dl.y, s);
+  vec3 c = vec3(mix(col.r, ci.r, aR), mix(col.g, ci.g, ab), mix(col.b, ci.b, aB));
+  c = mix(c, oc, ao);
+  return mix(col, c, vl);
+}
 vec3 eyeTap(vec3 col, float lon, float lat, float Z, float rimA, float pc){
   float side = lon < 0.0 ? -1.0 : 1.0;
   float u = lon - uShapeT.w * side;
@@ -427,6 +524,7 @@ vec3 eyeTap(vec3 col, float lon, float lat, float Z, float rimA, float pc){
 // falloff, multiplied toward the deep pool colour → a darker, bluer band hugging the eye's lower edges.
 // Once per pixel (centre tap, before the fill), only inside the eye capsules; follows gaze, lid and fade.
 vec3 eyeShadow(vec3 col, float lon, float lat, float Z){
+  if (uLay.x > 0.5) return col;                               // Polly layers: the ink outline does that job
   float side = lon < 0.0 ? -1.0 : 1.0;
   float u = lon - uShapeT.w * side;
   float v = lat - uEyeK2.z + uEyeK2.w * u * u + uShadow.y;
@@ -481,6 +579,8 @@ vec3 eyes(vec3 col, vec2 p, vec2 off){
   // toon variant (compiled only while the toon layer is on: '#define TOON' is prepended by index.html)
   float rimA = 0.0;                                            // ≥ 0 on the centre tap, ≤ 0 on the side taps
   if (uQA < 0.5 && uToon.x > 0.0) { rimA = eyeRim(lon, lat, Z); col = mix(col, uToonCol, rimA); }
+  // Polly layers first, then brows (stroke) and FX (anger marks, blush) on top of them (layer order)
+  if (uLay.x > 0.5) col = layEyes(col, lon, lat, Z, dl);
   // emote stroke brows (arched tapered capsules + dark outline) + anger marks + soft blush
   if (uQA < 0.5 && uMotif.z > 0.0) {
     float side = lon < 0.0 ? -1.0 : 1.0;
@@ -511,12 +611,14 @@ vec3 eyes(vec3 col, vec2 p, vec2 off){
     float bv = uEyeP.z * smoothstep(0.02, 0.08, Z) * exp(-bd*bd*2.5) * .55;
     col = mix(col, vec3(.95,.35,.55), bv * uMotif.w);
   }
+  if (uLay.x > 0.5) return col;
   gCovP = 0.0; gFillMax = 0.0; gPupilCol = uToonCol;
   float cg = eyeTap(col, lon, lat, Z, rimA, 1.0).g;            // centre tap (also the pupil)
   vec3 c = vec3(eyeTap(col, lon + dl.x, lat + dl.y, Z + dl.z, -rimA, 0.0).r, cg,
                 eyeTap(col, lon - dl.x, lat - dl.y, Z - dl.z, -rimA, 0.0).b);   // side taps skip the pupil
   return mix(c, gPupilCol, gCovP * gFillMax);
 #else
+  if (uLay.x > 0.5) return layEyes(col, lon, lat, Z, dl);
   return vec3(eyeTap(col, lon + dl.x, lat + dl.y, Z + dl.z, 0.0, 0.0).r,
               eyeTap(col, lon, lat, Z, 0.0, 0.0).g,
               eyeTap(col, lon - dl.x, lat - dl.y, Z - dl.z, 0.0, 0.0).b);
@@ -530,6 +632,7 @@ void main(){
   float dith = (dhash(mod(f, 64.0)) - 0.5) / 255.0;     // dither (kills 8-bit banding)
 
   // QA silhouette: black page, solid white eye fills (cut SDF) — for IoU vs ref masks
+  if (uQA > 0.5 && uLay.x > 0.5) { gl_FragColor = vec4(layQA(vec3(136.0 / 255.0)), 1.0); return; }
   if (uQA > 0.5) {
     vec3 col = vec3(0.0);
     if (uAtlas.x > -0.5) {
@@ -636,10 +739,10 @@ void main(){
   gl_Position = vec4(aPos, 0.0, 1.0);
 }
 </script>
-<script src="coats.js?v=10070450"></script>
-<script src="springs.js?v=10070450"></script>
-<script src="face.js?v=10070450"></script>
-<script src="emotes.js?v=10070450"></script>
+<script src="coats.js?v=10071053"></script>
+<script src="springs.js?v=10071053"></script>
+<script src="face.js?v=10071053"></script>
+<script src="emotes.js?v=10071053"></script>
 <script>
 (function(){
 'use strict';
@@ -713,7 +816,7 @@ const toFallback=why=>{console.warn('Astrid: '+why+', using the SVG fallback'); 
 const gl=cv.getContext('webgl',GL_OPTS)||cv.getContext('experimental-webgl',GL_OPTS);
 if(!gl){ toFallback('WebGL unavailable'); return; }
 const UNIFORMS=['uVS','uBodyM','uNT','uWarp','uPaper','uCore','uDeep','uMid','uEdge','uHalo','uEye','uEyeHi','uEyeLo','uGlow','uBloomCol','uLiftCol','uTouchCol','uAura','uMode',
-  'uRot','uEyeP','uEyeA','uShape','uShapeT','uShapeC','uAsym','uCutN','uLat','uShadow','uToon','uToonR','uRimP','uPupil','uPupilA','uPupilM','uPupilC','uMotif','uMotifCol','uBrow','uBrowCol','uBrowX','uToonCol','uQA','uEyeAtlas','uAtlas','uStampL','uStampR','uEyeL','uEyeR','uEyeK','uEyeK2','uFace','uQ','uBA','uBB','uBC','uCA','uCB','uCC','uFrost','uPoolK','uFringeK','uMisc','uTouch'];
+  'uRot','uEyeP','uEyeA','uShape','uShapeT','uShapeC','uAsym','uCutN','uLat','uShadow','uToon','uToonR','uRimP','uPupil','uPupilA','uPupilM','uPupilC','uMotif','uMotifCol','uBrow','uBrowCol','uBrowX','uToonCol','uQA','uEyeAtlas','uAtlas','uStampL','uStampR','uLayTex','uLay','uLayC','uLayL','uLayR','uLayQ','uLayML','uLayMR','uLayH','uLayB','uLayD','uEyeL','uEyeR','uEyeK','uEyeK2','uFace','uQ','uBA','uBB','uBC','uCA','uCB','uCC','uFrost','uPoolK','uFringeK','uMisc','uTouch'];
 let U={}, lost=false; const GN=24, GCOUNT=GN*GN*6;
 const draw=()=>gl.drawElements(gl.TRIANGLES,GCOUNT,gl.UNSIGNED_SHORT,0);
 /* The program comes in two variants: plain, and with '#define TOON' (the toon eye layer). Only the variant in
@@ -830,10 +933,84 @@ function loadEyeAtlas(){
   fetch('polly-sprite-atlas.json').then(r=>r.json()).then(j=>{ eyeAtlasMeta=j; }).catch(()=>{});
 }
 
+/* ---------------- Polly 3-layer rig (polly-layer-atlas.png / .json, built by tools/build_polly_layers.py) ----------------
+   Per emote, per eye: WHITE body (sclera colours; its alpha is the clip mask), PUPIL (coloured pupil + highlights + AA
+   fringe), OUTLINE blacks (follow the white) and CORE blacks (pupil dots / spirals: follow the pupil). Texture unit 1,
+   LINEAR (the QA blit samples exact texel centres, so it stays 1:1). The pupil offset is the gaze (pupil springs) ×
+   the eye's free room, then an engage-only containment against the body outline polygon (it only pushes once a hull
+   point goes past where it already sat at rest, so resting pupils never move and nothing notches). */
+let layTex=null, layReady=false, layMeta=null, layFail=false;
+const LAYE={};                                   // per 'emote-side': {poly:Float64Array, n, hx, hy, m, rest, rx, ry, ax, ay, ox0, oy0}
+function prepLayers(j){
+  j.ids.forEach(id=>{ const em=j.emotes[id]; ['L','R'].forEach(sd=>{ const e=em.eyes[sd], n=e.poly.length, m=e.hull.length;
+    const poly=new Float64Array(2*n); e.poly.forEach((q,i)=>{poly[2*i]=q[0]; poly[2*i+1]=q[1];});
+    const hx=new Float64Array(m), hy=new Float64Array(m), rest=new Float64Array(m); e.hull.forEach((q,i)=>{hx[i]=q[0]; hy[i]=q[1];});
+    const pc=e.pc||[e.anchor[0],e.anchor[1]];
+    const E={poly,n,hx,hy,m,rest,rx:e.range[0],ry:e.range[1],ax:e.anchor[0],ay:e.anchor[1],ox0:e.refOrigin[0],oy0:e.refOrigin[1],pd:new Float64Array(m),pgx:new Float64Array(m),pgy:new Float64Array(m),
+             pcx:pc[0],pcy:pc[1],piv:e.pivot,hasHl:!!e.hasHl,hasPupil:!!e.hasPupil};
+    for(let i=0;i<m;i++) rest[i]=Math.max(0,sdPoly(E,hx[i],hy[i]));        // rest penetration = allowance
+    LAYE[id+'-'+sd]=E; }); });
+}
+function loadLayerAtlas(){
+  if(layTex||layFail) return;
+  layTex=gl.createTexture();
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, layTex);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array([0,0,0,0]));
+  gl.activeTexture(gl.TEXTURE0);
+  const img=new Image(); let meta=null, imgOk=false;
+  const done=()=>{ if(!meta||!imgOk) return;
+    try{
+      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, layTex);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
+      gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL,gl.NONE);
+      gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,img);
+      gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL,gl.BROWSER_DEFAULT_WEBGL);
+      gl.activeTexture(gl.TEXTURE0);
+      prepLayers(meta); layMeta=meta; layReady=true;
+    }catch(e){ console.warn('Astrid: Polly layer atlas unavailable ('+e.message+'), using the silhouette atlas'); layFail=true; gl.activeTexture(gl.TEXTURE0); }
+    if(window.__astrid&&window.__astrid.kick) window.__astrid.kick(); };
+  img.onload=()=>{ imgOk=true; done(); }; img.onerror=()=>{ layFail=true; };
+  img.src='polly-layer-atlas.png?v=10071053';
+  fetch('polly-layer-atlas.json?v=10071053').then(r=>r.json()).then(j=>{ meta=j; done(); }).catch(()=>{ layFail=true; });
+}
+/* signed distance (texels, + outside) from (x, y) to the body polygon; LG = its gradient (unit, outward) */
+const LG={x:.5,y:.5};
+function sdPoly(E,x,y){
+  const P=E.poly, n=E.n; let dmin=1e18, inside=false, gx=0, gy=0;
+  for(let i=0,j=n-1;i<n;j=i++){
+    const xi=P[2*i], yi=P[2*i+1], xj=P[2*j], yj=P[2*j+1];
+    if(((yi>y)!==(yj>y))&&(x<(xj-xi)*(y-yi)/(yj-yi)+xi)) inside=!inside;
+    const ex=xj-xi, ey=yj-yi, wx=x-xi, wy=y-yi, ee=ex*ex+ey*ey; let t=ee>0?(wx*ex+wy*ey)/ee:0; t=t<0?0:t>1?1:t;
+    const dx=wx-ex*t, dy=wy-ey*t, d2=dx*dx+dy*dy; if(d2<dmin){dmin=d2; gx=dx; gy=dy;}
+  }
+  const d=Math.sqrt(dmin), sg=inside?-1:1, l=d||1; LG.x=sg*gx/l; LG.y=sg*gy/l; return sg*d;
+}
+/* engage-only containment (texels): per hull point, penetration past its rest allowance (+ a small hinge band, so
+   at rest the push is exactly 0); a C¹ soft hinge of the max pushes the offset along the softmax-weighted inward
+   normal, 4 fixed iterations → continuous in the gaze (spring-friendly, no popping). Result → LCO.x, LCO.y. */
+const LCO={x:.5,y:.5}, LCK={tau:.35,hinge:.4};
+function containLayer(E,ox,oy,sc){
+  const m=E.m, tau=LCK.tau, kh=LCK.hinge, k=sc||1, cx=E.pcx, cy=E.pcy; let dx=0, dy=0;
+  for(let it=0;it<5;it++){
+    let mx=-1e18;
+    for(let i=0;i<m;i++){ const d=sdPoly(E,cx+(E.hx[i]-cx)*k+ox+dx,cy+(E.hy[i]-cy)*k+oy+dy)-E.rest[i]-kh; E.pd[i]=d; E.pgx[i]=LG.x; E.pgy[i]=LG.y; if(d>mx) mx=d; }
+    const s=mx<=-kh?0:mx<kh?(mx+kh)*(mx+kh)/(4*kh):mx;
+    if(s<=0||it===4) break;
+    let nx=0, ny=0; for(let i=0;i<m;i++){ const w=Math.exp((E.pd[i]-mx)/tau); nx+=w*E.pgx[i]; ny+=w*E.pgy[i]; }
+    const nl=Math.sqrt(nx*nx+ny*ny)||1; dx-=s*nx/nl; dy-=s*ny/nl;
+  }
+  LCO.x=ox+dx; LCO.y=oy+dy;
+}
+const LAYS={on:0,row:-1,id:'',cur:'',offL:[0,0],offR:[0,0],rawL:[0,0],rawR:[0,0],qaL:[0,0],qaR:[0,0],tpr:0,dbg:0,qaScale:1};
+const vLay=new Float32Array(4), vLayC=new Float32Array(4), vLayL=new Float32Array(4), vLayR=new Float32Array(4), vLayQ=new Float32Array(4),
+      vLayML=new Float32Array(4), vLayMR=new Float32Array(4), vLayH=new Float32Array(4), vLayB=new Float32Array(4), vLayD=new Float32Array(4);
+
 function initGL(){              // (re)build everything GPU-side; also used after a context restore
   prog=null;                    // a restored context has no old program to delete
   if(!buildProg(progToon)) return false;
-  loadEyeAtlas(); loadQAMasks();
+  loadEyeAtlas(); loadQAMasks(); layTex=null; layReady=false; loadLayerAtlas();
   // one draw call: a GN×GN grid over the canvas (the vertex stage carries the smooth per-pixel work)
   const v=new Float32Array((GN+1)*(GN+1)*2), ix=new Uint16Array(GN*GN*6);
   for(let j=0,k=0;j<=GN;j++) for(let i=0;i<=GN;i++){v[k++]=i/GN*2-1; v[k++]=j/GN*2-1;}
@@ -1157,6 +1334,11 @@ let qaMode=Q.has("qa")?1:0;
 const MOTIF={typ:0,brow:0,blush:0, mark:0, col:[0,0,0], browCol:[0,0,0], browP:[1.1,.7,.2,0], browX:[.18,.5,.35,0]};
 function clearMotif(){ MOTIF.typ=0; MOTIF.brow=0; MOTIF.blush=0; MOTIF.mark=0; }
 function applyEmoteMeta(e){
+  // Polly layers on screen and another Polly emotion requested: its brows / lids wait for the closed frame
+  if(e&&typeof LAYS!=='undefined'&&LAYS.cur&&layReady&&layMeta.emotes[e.id]&&e.id!==LAYS.cur&&!(qaMode&&!LAYS.dbg)&&!forced){ LZ.meta=e; setToon(true); return; }
+  applyEmoteMetaNow(e);
+}
+function applyEmoteMetaNow(e){
   if(!e){ clearMotif(); T.lidSad=0; T.lidAngry=0; T.lidTired=0; return; }
   MOTIF.typ=e.motifId||0; MOTIF.brow=1; MOTIF.blush=e.blush||0; MOTIF.mark=e.mark||0;
   MOTIF.col=e.col.slice(); MOTIF.browCol=e.brow.col.slice();
@@ -1349,6 +1531,97 @@ function pupilLife(){        // toon pupils: dilation (mostly inside blinks) + d
   if(sp>.5){ PSV.dx=PSV.vx/sp; PSV.dy=-PSV.vy/sp; }               // eye-local direction (v up); held while slow
   step(pStr);
 }
+/* ================= Polly layered rig: life (springs only; every value snaps to the reference pose in ?qa / ?still /
+   forced poses, so the QA pose stays 1:1) =================
+   closure (lid / blink / expression swap): lClose 0 open … 1 shut. Fast close (≈50 ms to 90%), ALL layers swap on
+     the closed frame (≥ .9; pop emotions swap on a squash frame instead), 1–2 frame hold, slower under-damped reopen
+     (≈130 ms, 3–6% overshoot = a small stretch). The squashed eye fills with ink near shut, so it reads as a lid line.
+   gaze: darts + holds. A dart retargets a stiff spring (≈3 frames, ~3% overshoot) to 93% of the way (undershoot), then
+     a glissade to the target 70 ms later; holds ≥ 150 ms (+ exponential), a dead zone so pointer drift waits for the
+     next dart, ±0.5 px idle jitter at ~1–2 Hz, a blink on big shifts. Lid follows the vertical gaze (closure).
+   highlight: its own spring chasing 0.4 × the pupil offset (less travel, springy lag on darts).
+   motifs (secondary action): stars twinkle (random scale/rotation kicks per eye), hearts lub-dub (two scale kicks),
+     spirals spin (angular-velocity spring, eyes counter-rotate), pupil dilation follows arousal (transient after a
+     swap; content from petting). */
+const lClose=spring(0,.5,.5), lpX=spring(0,1,.33), lpY=spring(0,1,.33), dil=spring(1,.012,.9), spinV=spring(0,.02,.9);
+const mS=[spring(1,.12,.8),spring(1,.12,.8)], mR=[spring(0,.1,.82),spring(0,.1,.82)];
+const hlS=[spring(0,.1,.75),spring(0,.1,.75),spring(0,.1,.75),spring(0,.1,.75)];          // L x,y  R x,y (texels)
+ALL.push(lClose,lpX,lpY,dil,spinV,mS[0],mS[1],mR[0],mR[1],hlS[0],hlS[1],hlS[2],hlS[3]);
+const LAY_POP=new Set(['starry','love','furious']), LAY_AROUSE={love:.007,pleading:.006,starry:.006,furious:-.006};
+/* per-emotion blink clock: g = median gap ms (log-normal, σ s), h = closed hold ms, reopen spring k/d, dbl = double-
+   blink chance, half = half-blink chance. Close is always the fast spring (≈2× quicker than the reopen). */
+const LAY_BLINK={_:{g:3600,s:.45,h:90,k:.16,d:.62,dbl:.15,half:0},
+  sleepy:{g:4800,s:.4,h:220,k:.07,d:.75,dbl:0,half:.45}, bored:{g:5200,s:.4,h:150,k:.09,d:.72,dbl:0,half:.2},
+  angry:{g:8000,s:.35,h:80,k:.18,d:.6,dbl:0,half:0}, furious:{g:9500,s:.35,h:70,k:.2,d:.58,dbl:0,half:0},
+  pleading:{g:2400,s:.5,h:80,k:.16,d:.62,dbl:.35,half:0}, blush:{g:2600,s:.5,h:90,k:.16,d:.62,dbl:.3,half:0}};
+const LZ={pending:'',pop:false,ink:true,meta:null,holdUntil:-1,halfT:1.08,log:[]};
+const GZ={tx:0,ty:0,fx:0,fy:0,glAt:-1,holdUntil:0,jitAt:0,jx:0,jy:0,darts:0};
+const MF={next:[0,0],ang:[0,0],pang:[0,0],lub:-1};
+const gauss=()=>(Math.random()+Math.random()+Math.random()+Math.random()-2)*1.7320508;   // Irwin–Hall ≈ N(0,1)
+function layBlink(){                       // one scheduled blink for the displayed emotion
+  const B=LAY_BLINK[LAYS.cur]||LAY_BLINK._;
+  LZ.halfT=Math.random()<B.half?.62:1.08;
+  blink(B.h);
+  if(Math.random()<B.dbl) doubleAt=CK.simT+B.h+170+Math.random()*80;
+  nextBlink=CK.simT+Math.max(900,B.g*Math.exp(B.s*gauss()));
+}
+function layFlushMeta(){ if(LZ.meta){ const e=LZ.meta; LZ.meta=null; applyEmoteMetaNow(e); } }
+function laySwap(id){
+  const was=LAYS.cur; LAYS.cur=id; layFlushMeta();
+  MF.ang[0]=MF.ang[1]=MF.pang[0]=MF.pang[1]=0; snap(spinV,0); MF.next[0]=MF.next[1]=CK.simT+250; MF.lub=-1;
+  if(LAY_AROUSE[id]&&!still&&!forced&&!(qaMode&&!LAYS.dbg)) dil.v+=LAY_AROUSE[id];
+  LZ.log.push({t:+CK.simT.toFixed(1),from:was,to:id,closure:+lClose.x.toFixed(3),pop:LZ.pop}); if(LZ.log.length>20) LZ.log.shift();
+}
+function layLife(){
+  const rest=still||forced||(qaMode&&!LAYS.dbg);                     // the debug sweep animates inside the QA blit
+  // which emotion is displayed (cur) vs requested (eyesName)
+  const tgt=(layReady&&eyesName.indexOf('polly-')===0&&layMeta.emotes[eyesName.slice(6)])?eyesName.slice(6):'';
+  if(!tgt){ if(SH.a===SH.b||shapeT.x>=.5){ LAYS.cur=''; } LZ.pending=''; layFlushMeta(); }
+  else if(!LAYS.cur){ if(SH.a===SH.b||shapeT.x>=.5||F.SHAPES[SH.a].name==='polly-'+tgt) laySwap(tgt); }
+  else if(tgt!==LAYS.cur){ if((qaMode&&!LAYS.dbg)||forced) { LZ.pending=''; laySwap(tgt); } else if(LZ.pending!==tgt){ LZ.pending=tgt; LZ.pop=LAY_POP.has(tgt); LZ.ink=!LZ.pop; } }
+  else if(LZ.pending){ LZ.pending=''; }
+  // closure
+  const B=LAY_BLINK[LAYS.cur]||LAY_BLINK._;
+  let tc=0;
+  if(LZ.pending) tc=LZ.pop?.97:1.08;
+  else if(CK.simT<LZ.holdUntil) tc=LZ.pop?.97:1.08;
+  else if(CK.simT<blinkUntil){ tc=LZ.halfT; LZ.ink=true; }
+  if(tc>lClose.x){ lClose.k=.5; lClose.d=.5; } else if(LZ.pop&&!LZ.pending){ lClose.k=.2; lClose.d=.6; } else { lClose.k=B.k; lClose.d=B.d; }
+  lClose.t=tc; step(lClose);
+  if(LZ.pending&&lClose.x>=.9){ const id=LZ.pending; LZ.pending=''; laySwap(id); LZ.holdUntil=CK.simT+25; }
+  if(!LZ.pending&&CK.simT>=LZ.holdUntil&&CK.simT>=blinkUntil&&lClose.x<.05) LZ.pop=false;
+  // gaze darts + holds
+  const cl=v=>Math.max(-1,Math.min(1,v));
+  if(forced){ snap(lpX,cl(pupX.x/.5)); snap(lpY,cl(pupY.x/.34)); GZ.tx=lpX.x; GZ.ty=lpY.x; GZ.jx=GZ.jy=0; }
+  else {
+    const desX=cl(yaw.t/.5), desY=cl(pitch.t/.34), dX=desX-GZ.tx, dY=desY-GZ.ty, dd=Math.sqrt(dX*dX+dY*dY);
+    if(CK.simT>=GZ.holdUntil&&dd>.045){
+      GZ.fx=desX; GZ.fy=desY; GZ.tx+=dX*.93; GZ.ty+=dY*.93; GZ.glAt=CK.simT+70; GZ.darts++;
+      GZ.holdUntil=CK.simT+150+Math.min(1400,-Math.log(1-Math.random()*.999)*300);
+      if(dd>.6&&!rest) blink(80);
+    }
+    if(GZ.glAt>0&&CK.simT>=GZ.glAt){ GZ.tx=GZ.fx; GZ.ty=GZ.fy; GZ.glAt=-1; }
+    if(rest){ GZ.jx=GZ.jy=0; }
+    else if(CK.simT>=GZ.jitAt){ GZ.jx=(Math.random()-.5)*.05; GZ.jy=(Math.random()-.5)*.05; GZ.jitAt=CK.simT+450+Math.random()*650; }
+    lpX.t=GZ.tx+GZ.jx; lpY.t=GZ.ty+GZ.jy; step(lpX); step(lpY);
+  }
+  // highlight: 0.4 × the (contained) pupil offset of the last frame, on its own springy lag
+  const hk=.4, ht=[LAYS.offL[0]*hk,LAYS.offL[1]*hk,LAYS.offR[0]*hk,LAYS.offR[1]*hk];
+  for(let i=0;i<4;i++){ if(rest&&!forced) snap(hlS[i],0); else if(forced) snap(hlS[i],ht[i]); else { hlS[i].t=ht[i]; step(hlS[i]); } }
+  // motifs (secondary action) + arousal dilation
+  MF.pang[0]=MF.ang[0]; MF.pang[1]=MF.ang[1];
+  if(rest){ for(let e=0;e<2;e++){ snap(mS[e],1); snap(mR[e],0); MF.ang[e]=MF.pang[e]=0; } snap(dil,1); snap(spinV,0); return; }
+  const id=LAYS.cur, R=Math.random;
+  if(id==='starry'){ for(let e=0;e<2;e++) if(CK.simT>=MF.next[e]){ mS[e].v+=.04+.025*R(); mR[e].v+=(R()<.5?-1:1)*(.07+.04*R()); MF.next[e]=CK.simT+600+R()*900; } }   // ≈ +5–8 % twinkle, ±6–10° (staggered per eye)
+  if(id==='love'){
+    if(CK.simT>=MF.next[0]){ mS[0].v+=.07; mS[1].v+=.07; MF.lub=CK.simT+170; MF.next[0]=CK.simT+900+R()*500; }   // lub ≈ +10 %
+    if(MF.lub>0&&CK.simT>=MF.lub){ mS[0].v+=.045; mS[1].v+=.045; MF.lub=-1; }                                            // dub ≈ +6 %
+  }
+  spinV.t=id==='dizzy'?.0785:0; step(spinV);                          // ≈ .75 rev/s at 60 Hz
+  MF.ang[0]+=spinV.x; MF.ang[1]-=spinV.x;
+  dil.t=1+.06*Math.max(0,Math.min(1,happy.x)); step(dil);
+  for(let e=0;e<2;e++){ step(mS[e]); step(mR[e]); }
+}
 function tick(){            // one fixed 60 Hz step of the whole motion model
   for(let i=0;i<ALL.length;i++) save(ALL[i]); CK.prevNT=CK.noiseT;
   const dt=STEP; CK.simT+=dt;
@@ -1357,7 +1630,7 @@ function tick(){            // one fixed 60 Hz step of the whole motion model
       if(!RM&&CK.simT-CK.pointerAt>2500&&happy.x<.15&&!pet.down){const home=Math.random()<.45; yaw.t=home?0:(Math.random()*2-1)*.36; pitch.t=home?0:(Math.random()*2-1)*.2;}
       nextGlance=CK.simT+1800+Math.random()*2600;
     }
-    if(CK.simT>=nextBlink){ blink(); if(Math.random()<.18) doubleAt=CK.simT+260; nextBlink=CK.simT+2800+Math.random()*3400; }
+    if(CK.simT>=nextBlink){ if(LAYS.cur) layBlink(); else { blink(); if(Math.random()<.18) doubleAt=CK.simT+260; nextBlink=CK.simT+2800+Math.random()*3400; } }
     if(doubleAt>0&&CK.simT>=doubleAt){ blink(); doubleAt=-1; }
   }
   petTick(dt);
@@ -1368,6 +1641,7 @@ function tick(){            // one fixed 60 Hz step of the whole motion model
   step(yaw);step(pitch);step(size);step(lid);
   if(!forced){ pupX.t=yaw.t; pupY.t=pitch.t; step(pupX); step(pupY); }
   pupilLife();
+  layLife();
   toonA.t=toonOn?1:0; step(toonA);
   // glass follows the pose from LAG ms ago on a heavier, softer spring (eyes lead)
   if(hLen===HN){h0=(h0+1)%HN;hLen--;}
@@ -1392,7 +1666,7 @@ function tick(){            // one fixed 60 Hz step of the whole motion model
 }
 const EYE={hw:.5,hh:.5,cap:.5,fade:.5,ex:.5,oy:.5,vtop:.5,ck:.5,asx:.5,asy:.5,cut:.5,cutk:.5,nLx:.5,nLy:.5,nRx:.5,nRy:.5}, EYEB={hw:.5,hh:.5,cap:.5,fade:.5,ex:.5,oy:.5,vtop:.5,ck:.5,asx:.5,asy:.5,cut:.5,cutk:.5,nLx:.5,nLy:.5,nRx:.5,nRy:.5}, EV3=new Float64Array(8), PA={x:.5,y:.5,z:.5}, PB={x:.5,y:.5,z:.5}, PJ=new Float64Array(8), EV=new Float64Array(2),
       EYO={hw:.5,hh:.5,cap:.5,fade:.5,ex:.5,oy:.5,vtop:.5,ck:.5,asx:.5,asy:.5,cut:.5,cutk:.5,nLx:.5,nLy:.5,nRx:.5,nRy:.5}, EYOB={hw:.5,hh:.5,cap:.5,fade:.5,ex:.5,oy:.5,vtop:.5,ck:.5,asx:.5,asy:.5,cut:.5,cutk:.5,nLx:.5,nLy:.5,nRx:.5,nRy:.5},
-      TBOX={hw:.5,hh:.5,oy:.5}, TOPEN={hw:.5,hh:.5}, TK={rim:.5,pupil:.5,follow:.5,dil:.5,stretch:.5,sdx:.5,sdy:.5}, TO={ox:.5,oy:.5,grow:.5,rs:.5,rpo:.5,rpu:.5,a:.5,b:.5,pin:.5,pu:.5,pv:.5,m0:.5,m1:.5,m3:.5,ms:.5,cuL:.5,cvL:.5,cuR:.5,cvR:.5},
+      EYL={hw:.5,hh:.5,cap:.5,fade:.5,ex:.5,oy:.5,vtop:.5,ck:.5,asx:.5,asy:.5,cut:.5,cutk:.5,nLx:.5,nLy:.5,nRx:.5,nRy:.5}, TBOX={hw:.5,hh:.5,oy:.5}, TOPEN={hw:.5,hh:.5}, TK={rim:.5,pupil:.5,follow:.5,dil:.5,stretch:.5,sdx:.5,sdy:.5}, TO={ox:.5,oy:.5,grow:.5,rs:.5,rpo:.5,rpu:.5,a:.5,b:.5,pin:.5,pu:.5,pv:.5,m0:.5,m1:.5,m3:.5,ms:.5,cuL:.5,cvL:.5,cuR:.5,cvR:.5},
       TP={ro:.5,ru:.5,rg:.5,rs:.5,rpo:.5,rpu:.5,pa:.5,pb:.5,pin:.5,pdown:.5,r:.5,e:.5,taper:.5,tilt:.5,bend:.5,lki:.5,lkm:.5,lko:.5}, TPK=Object.keys(TP);
 /* uniform staging: preallocated Float32Arrays + uniform*fv. Passing doubles straight to gl.uniform4f boxes
    each argument (a heap number per value per frame); writing into typed arrays doesn't allocate at all. */
@@ -1453,6 +1727,46 @@ function pushUniforms(){
     }
   }
 
+  // Polly layered rig: on while a Polly emotion is displayed (LAYS.cur; it changes only on a closed/squash frame)
+  {
+    const id=LAYS.cur, em=layReady&&id&&layMeta.emotes[id];
+    LAYS.on=em?1:0; LAYS.id=id;
+    if(em){
+      if(U.uAtlas) gl.uniform4f(U.uAtlas, -1, 8, 3, 1);                      // silhouette atlas off on this path
+      gl.uniform1i(U.uLayTex,1); gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D,layTex); gl.activeTexture(gl.TEXTURE0);
+      const EL=LAYE[id+'-L'], ER=LAYE[id+'-R'];
+      const gx=Math.max(-1,Math.min(1,at(lpX,a)))*T.pupilF, gy=Math.max(-1,Math.min(1,at(lpY,a)))*T.pupilF;   // +y down
+      // convergence limit: nasal travel is 85% of the temporal travel, so the pair never reads cross-eyed
+      const gxL=gx>0?gx*.85:gx, gxR=gx<0?gx*.85:gx;
+      const dl=at(dil,a), sL=dl*at(mS[0],a), sR=dl*at(mS[1],a);
+      containLayer(EL,gxL*EL.rx,gy*EL.ry,sL); LAYS.offL[0]=LCO.x; LAYS.offL[1]=LCO.y; LAYS.rawL[0]=gxL*EL.rx; LAYS.rawL[1]=gy*EL.ry;
+      containLayer(ER,gxR*ER.rx,gy*ER.ry,sR); LAYS.offR[0]=LCO.x; LAYS.offR[1]=LCO.y; LAYS.rawR[0]=gxR*ER.rx; LAYS.rawR[1]=gy*ER.ry;
+      if(qaMode&&!LAYS.dbg){ LAYS.offL[0]=Math.round(LAYS.offL[0]); LAYS.offL[1]=Math.round(LAYS.offL[1]); LAYS.offR[0]=Math.round(LAYS.offR[0]); LAYS.offR[1]=Math.round(LAYS.offR[1]); }
+      // size: the displayed emotion's own open box (not the shape morph / blink lid) × the tap spring
+      const e1=EV3[1], e2=EV3[2]; EV3[1]=1; EV3[2]=SHAPE_NAMES.indexOf('polly-'+id); F.eyeShapeV(EYL,EV3); EV3[1]=e1; EV3[2]=e2;
+      LAYS.row=em.row; LAYS.tpr=(em.maxdim/1.68)/Math.max(EYL.hw,EYL.hh,1e-4);   // long axis = 0.84 × the box (as the silhouette atlas)
+      vLay[0]=1; vLay[1]=em.row; vLay[2]=1/layMeta.W; vLay[3]=1/layMeta.H; gl.uniform4fv(U.uLay,vLay);
+      vLayC[0]=layMeta.cw; vLayC[1]=layMeta.ch; vLayC[2]=LAYS.tpr; vLayC[3]=qaMode?H:0; gl.uniform4fv(U.uLayC,vLayC);
+      vLayL[0]=EL.ax; vLayL[1]=EL.ay; vLayL[2]=LAYS.offL[0]; vLayL[3]=LAYS.offL[1]; gl.uniform4fv(U.uLayL,vLayL);
+      vLayR[0]=ER.ax; vLayR[1]=ER.ay; vLayR[2]=LAYS.offR[0]; vLayR[3]=LAYS.offR[1]; gl.uniform4fv(U.uLayR,vLayR);
+      // pupil sprite transform about its centre: rotation (spiral spin / star wiggle) and scale (dilation / pulse)
+      const rL=MF.pang[0]+(MF.ang[0]-MF.pang[0])*a+at(mR[0],a), rR=MF.pang[1]+(MF.ang[1]-MF.pang[1])*a+at(mR[1],a);
+      LAYS.sL=sL; LAYS.sR=sR; LAYS.rL=rL; LAYS.rR=rR;
+      vLayML[0]=EL.pcx; vLayML[1]=EL.pcy; vLayML[2]=Math.cos(rL)/sL; vLayML[3]=Math.sin(rL)/sL; gl.uniform4fv(U.uLayML,vLayML);
+      vLayMR[0]=ER.pcx; vLayMR[1]=ER.pcy; vLayMR[2]=Math.cos(rR)/sR; vLayMR[3]=Math.sin(rR)/sR; gl.uniform4fv(U.uLayMR,vLayMR);
+      // highlight: its own (lagging, reduced-travel) offset, relative to the pupil
+      vLayH[0]=at(hlS[0],a)-LAYS.offL[0]; vLayH[1]=at(hlS[1],a)-LAYS.offL[1]; vLayH[2]=at(hlS[2],a)-LAYS.offR[0]; vLayH[3]=at(hlS[3],a)-LAYS.offR[1];
+      if(qaMode&&!LAYS.dbg){ for(let i=0;i<4;i++) vLayH[i]=Math.round(vLayH[i]); }
+      gl.uniform4fv(U.uLayH,vLayH);
+      // closure: blink / swap spring + lid follow (down → the lid drops ~10%, up → lifts 3%)
+      const cb=Math.max(-.1,Math.min(1,at(lClose,a))), lf=.10*Math.max(0,gy)-.03*Math.max(0,-gy), cc=Math.min(1,cb+lf);
+      const ik=LZ.ink?Math.max(0,Math.min(1,(cb-.75)/.22)):0;
+      LAYS.close=cc; LAYS.ink=ik*ik*(3-2*ik);
+      vLayB[0]=EL.piv; vLayB[1]=ER.piv; vLayB[2]=1-.9*cc; vLayB[3]=LAYS.ink; gl.uniform4fv(U.uLayB,vLayB);
+      const pxu=(W/Math.max(qaVS.Wc,1))/Math.max(qaVS.k,1e-6);            // device px per face unit
+      vLayD[0]=LAYS.tpr/(RR*pxu); vLayD[1]=LAYS.dbg; vLayD[2]=qaMode?LAYS.qaScale:1; vLayD[3]=0; gl.uniform4fv(U.uLayD,vLayD);
+    } else if(U.uLay){ vLay[0]=0; gl.uniform4fv(U.uLay,vLay); }
+  }
   vShapeT[0]=Math.cos(tl); vShapeT[1]=Math.sin(tl); vShapeT[2]=SA.bend+(SB.bend-SA.bend)*mt; vShapeT[3]=lonR; gl.uniform4fv(U.uShapeT,vShapeT);
   const eoy=EYE.oy+(EYEB.oy-EYE.oy)*mt;
   vShapeC[0]=eoy; vShapeC[1]=EYE.vtop+(EYEB.vtop-EYE.vtop)*mt; vShapeC[2]=EYE.ck+(EYEB.ck-EYE.ck)*mt; gl.uniform4fv(U.uShapeC,vShapeC);
@@ -1468,7 +1782,7 @@ function pushUniforms(){
   // well inside the capsule margin mg below, so it costs nothing outside the eyes' region)
   // toon layer (face.js toonV): open boxes (lid 1) size the pupils so a blink/squint covers them
   const ta=Math.max(0,Math.min(1,at(toonA,a))), tr=T.tRim&&ta>.002?ta:0, tp=T.tPupil&&ta>.002?ta:0;
-  vToon[0]=tr; vToon[1]=tp;
+  vToon[0]=LAYS.on?0:tr; vToon[1]=tp;                                    // Polly layers bring their own ink outline
   if(tr+tp>0){
     EV3[1]=1; EV3[2]=SH.a; F.eyeShapeV(EYO,EV3); if(mt>0){ EV3[2]=SH.b; F.eyeShapeV(EYOB,EV3); } else { EYOB.hw=EYO.hw; EYOB.hh=EYO.hh; }
     TBOX.hw=ehw; TBOX.hh=ehh; TBOX.oy=eoy; TOPEN.hw=EYO.hw+(EYOB.hw-EYO.hw)*mt; TOPEN.hh=EYO.hh+(EYOB.hh-EYO.hh)*mt;
@@ -1517,8 +1831,22 @@ function pushUniforms(){
   vEyeK[0]=w; vEyeK[1]=gk(4+3*w); vEyeK[2]=gk(3.5+2.5*w); vEyeK[3]=ihw; gl.uniform4fv(U.uEyeK,vEyeK);
   vEyeK2[0]=1/(2*ehh+1e-4); vEyeK2[1]=-ehw*RR*.7; vEyeK2[2]=lat0; vEyeK2[3]=arc*ihw; gl.uniform4fv(U.uEyeK2,vEyeK2);
 
+  // Polly layers, QA pose: 1:1 device-px blit at the rig's eye-centre midpoint, the reference's own L/R spacing
+  if(LAYS.on&&qaMode){
+    const EL=LAYE[LAYS.id+'-L'], ER=LAYE[LAYS.id+'-R'];
+    PJ[0]=cy; PJ[1]=sy; PJ[2]=cp; PJ[3]=sp; PJ[4]=cr; PJ[5]=sr; PJ[7]=lat0;
+    PJ[6]=-lonR; F.projectV(PA,PJ); PJ[6]=lonR; F.projectV(PB,PJ);
+    const cA=unitsToCss(PA.x,PA.y), cB=unitsToCss(PB.x,PB.y);
+    const mx=(cA.x+cB.x)/2*dpr, my=(cA.y+cB.y)/2*dpr;
+    const rmx=((EL.ox0+EL.ax)+(ER.ox0+ER.ax))/2, rmy=((EL.oy0+EL.ay)+(ER.oy0+ER.ay))/2;
+    const sx=Math.round(mx-rmx), sy2=Math.round(my-rmy);
+    LAYS.qaL[0]=sx+EL.ox0; LAYS.qaL[1]=sy2+EL.oy0; LAYS.qaR[0]=sx+ER.ox0; LAYS.qaR[1]=sy2+ER.oy0;
+    if(LAYS.qaScale>1){ const k=LAYS.qaScale; LAYS.qaL[0]=mx+(LAYS.qaL[0]-mx)*k; LAYS.qaL[1]=my+(LAYS.qaL[1]-my)*k; LAYS.qaR[0]=mx+(LAYS.qaR[0]-mx)*k; LAYS.qaR[1]=my+(LAYS.qaR[1]-my)*k; }
+    vLayQ[0]=LAYS.qaL[0]; vLayQ[1]=LAYS.qaL[1]; vLayQ[2]=LAYS.qaR[0]; vLayQ[3]=LAYS.qaR[1]; gl.uniform4fv(U.uLayQ,vLayQ);
+  }
   // Screen-space traced stamps (Polly atlas): billboard boxes at projected eye centres
-  if(U.uStampL && (typeof SA.atlas==='number' && SA.atlas>=0 || typeof SB.atlas==='number' && SB.atlas>=0)){
+  if(LAYS.on){ if(qaBlitCv) qaBlitCv.style.display='none'; }
+  else if(U.uStampL && (typeof SA.atlas==='number' && SA.atlas>=0 || typeof SB.atlas==='number' && SB.atlas>=0)){
     const stampOne = (side) => {
       PJ[6]=side*lonR; PJ[7]=lat0;
       const C0={x:0,y:0,z:0}; F.projectV(C0,PJ);
@@ -1707,7 +2035,7 @@ function patchShape(name,fields){
   if(SHAPE_NAMES.indexOf(eyesName)===i){ SH.a=SH.b=i; snap(shapeT,0); }
   return true;
 }
-window.__astrid={drive,trace,snapLid:v=>snap(lid,v),setEyes,setToon,patchShape,setQA:v=>{qaMode=v?1:0;},kick:()=>{pushUniforms(); draw();},atlasReady:()=>eyeAtlasReady&&(!qaMode||qaMaskReady),qaBlit:()=>({ready:qaMaskReady,imgs:Object.keys(qaMaskImgs).length,cv:!!qaBlitCv,disp:qaBlitCv&&qaBlitCv.style.display,w:qaBlitCv&&qaBlitCv.width,h:qaBlitCv&&qaBlitCv.height,vs:qaVS,last:qaLastPaint}),
+window.__astrid={drive,trace,snapLid:v=>snap(lid,v),setEyes,setToon,patchShape,setQA:v=>{qaMode=v?1:0;},kick:()=>{pushUniforms(); draw();},atlasReady:()=>eyeAtlasReady&&(layReady||layFail)&&(!qaMode||qaMaskReady),layDbg:v=>{LAYS.dbg=+v||0;},layScale:v=>{LAYS.qaScale=Math.max(1,+v||1);},layers:()=>({ready:layReady,fail:layFail,on:LAYS.on,id:LAYS.id,cur:LAYS.cur,pending:LZ.pending,close:LAYS.close,ink:LAYS.ink,lClose:lClose.x,sL:LAYS.sL,sR:LAYS.sR,rL:LAYS.rL,rR:LAYS.rR,hl:Array.from(vLayH),gaze:[lpX.x,lpY.x],gz:{tx:GZ.tx,ty:GZ.ty,hold:GZ.holdUntil,darts:GZ.darts},blinkUntil,simT:CK.simT,swaps:LZ.log.slice(),brow:MOTIF.browP.slice(),row:LAYS.row,offL:LAYS.offL.slice(),offR:LAYS.offR.slice(),rawL:LAYS.rawL.slice(),rawR:LAYS.rawR.slice(),qaL:LAYS.qaL.slice(),qaR:LAYS.qaR.slice(),tpr:LAYS.tpr,H,W,dpr}),qaBlit:()=>({ready:qaMaskReady,imgs:Object.keys(qaMaskImgs).length,cv:!!qaBlitCv,disp:qaBlitCv&&qaBlitCv.style.display,w:qaBlitCv&&qaBlitCv.width,h:qaBlitCv&&qaBlitCv.height,vs:qaVS,last:qaLastPaint}),
 qaBlitTest:()=>{
   ensureQABlit();
   const Ls=[90,120,35,35], Rs=[150,120,35,35];

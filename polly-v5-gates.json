@@ -1,0 +1,2374 @@
+{
+ "passed": true,
+ "measured_on": "QA pose: the rig's own shader composite of the SDF layer atlas, 1:1 device px, rest gaze (?qa&still&noadapt&seed=7, carbon/dark, toon). The v4 reference-mask blit canvas is asserted hidden on every shot.",
+ "thresholds": {
+  "white_iou": 0.995,
+  "white_bmax": 1.0,
+  "pupil_iou": 0.99,
+  "pupil_biou": 0.95,
+  "pupil_de": 2.0,
+  "black_cmean": 0.35,
+  "black_bmax": 1.0
+ },
+ "means": {
+  "white_iou": 1.0,
+  "white_bmax": 0.0,
+  "pupil_iou": 1.0,
+  "pupil_biou": 1.0,
+  "pupil_de": 0.0,
+  "black_cmean": 0.0,
+  "black_bmax": 0.0
+ },
+ "layer_pass": {
+  "white": true,
+  "pupil": true,
+  "black": true
+ },
+ "mean_pass": true,
+ "per_emotion": {
+  "cheerful": {
+   "L": {
+    "white": {
+     "iou": 1.0,
+     "bmean": 0.0,
+     "bmax": 0.0,
+     "bp99": 0.0,
+     "pass": true
+    },
+    "pupil": {
+     "iou": 1.0,
+     "biou": 1.0,
+     "de": {
+      "mean": 0.0,
+      "p95": 0.0,
+      "n": 22
+     },
+     "comps": [
+      1,
+      1
+     ],
+     "area": [
+      409,
+      409
+     ],
+     "empty": false,
+     "pass": true
+    },
+    "black": {
+     "cmean": 0.0,
+     "bmax": 0.0,
+     "p99": 0.0,
+     "comps": [
+      2,
+      2
+     ],
+     "euler": [
+      2,
+      2
+     ],
+     "iou_info": 1.0,
+     "pass": true
+    }
+   },
+   "R": {
+    "white": {
+     "iou": 1.0,
+     "bmean": 0.0,
+     "bmax": 0.0,
+     "bp99": 0.0,
+     "pass": true
+    },
+    "pupil": {
+     "iou": 1.0,
+     "biou": 1.0,
+     "de": {
+      "mean": 0.0,
+      "p95": 0.0,
+      "n": 13
+     },
+     "comps": [
+      1,
+      1
+     ],
+     "area": [
+      420,
+      420
+     ],
+     "empty": false,
+     "pass": true
+    },
+    "black": {
+     "cmean": 0.0,
+     "bmax": 0.0,
+     "p99": 0.0,
+     "comps": [
+      3,
+      3
+     ],
+     "euler": [
+      3,
+      3
+     ],
+     "iou_info": 1.0,
+     "pass": true
+    }
+   }
+  },
+  "confident": {
+   "L": {
+    "white": {
+     "iou": 1.0,
+     "bmean": 0.0,
+     "bmax": 0.0,
+     "bp99": 0.0,
+     "pass": true
+    },
+    "pupil": {
+     "iou": 1.0,
+     "biou": 1.0,
+     "de": {
+      "mean": 0.0,
+      "p95": 0.0,
+      "n": 1717
+     },
+     "comps": [
+      1,
+      1
+     ],
+     "area": [
+      2123,
+      2123
+     ],
+     "empty": false,
+     "pass": true
+    },
+    "black": {
+     "cmean": 0.0,
+     "bmax": 0.0,
+     "p99": 0.0,
+     "comps": [
+      2,
+      2
+     ],
+     "euler": [
+      2,
+      2
+     ],
+     "iou_info": 1.0,
+     "pass": true
+    }
+   },
+   "R": {
+    "white": {
+     "iou": 1.0,
+     "bmean": 0.0,
+     "bmax": 0.0,
+     "bp99": 0.0,
+     "pass": true
+    },
+    "pupil": {
+     "iou": 1.0,
+     "biou": 1.0,
+     "de": {
+      "mean": 0.0,
+      "p95": 0.0,
+      "n": 1650
+     },
+     "comps": [
+      1,
+      1
+     ],
+     "area": [
+      2056,
+      2056
+     ],
+     "empty": false,
+     "pass": true
+    },
+    "black": {
+     "cmean": 0.0,
+     "bmax": 0.0,
+     "p99": 0.0,
+     "comps": [
+      2,
+      2
+     ],
+     "euler": [
+      2,
+      2
+     ],
+     "iou_info": 1.0,
+     "pass": true
+    }
+   }
+  },
+  "bored": {
+   "L": {
+    "white": {
+     "iou": 1.0,
+     "bmean": 0.0,
+     "bmax": 0.0,
+     "bp99": 0.0,
+     "pass": true
+    },
+    "pupil": {
+     "iou": 1.0,
+     "biou": 1.0,
+     "de": {
+      "mean": 0.0,
+      "p95": 0.0,
+      "n": 1160
+     },
+     "comps": [
+      1,
+      1
+     ],
+     "area": [
+      1494,
+      1494
+     ],
+     "empty": false,
+     "pass": true
+    },
+    "black": {
+     "cmean": 0.0,
+     "bmax": 0.0,
+     "p99": 0.0,
+     "comps": [
+      3,
+      3
+     ],
+     "euler": [
+      3,
+      3
+     ],
+     "iou_info": 1.0,
+     "pass": true
+    }
+   },
+   "R": {
+    "white": {
+     "iou": 1.0,
+     "bmean": 0.0,
+     "bmax": 0.0,
+     "bp99": 0.0,
+     "pass": true
+    },
+    "pupil": {
+     "iou": 1.0,
+     "biou": 1.0,
+     "de": {
+      "mean": 0.0,
+      "p95": 0.0,
+      "n": 1129
+     },
+     "comps": [
+      1,
+      1
+     ],
+     "area": [
+      1464,
+      1464
+     ],
+     "empty": false,
+     "pass": true
+    },
+    "black": {
+     "cmean": 0.0,
+     "bmax": 0.0,
+     "p99": 0.0,
+     "comps": [
+      3,
+      3
+     ],
+     "euler": [
+      3,
+      3
+     ],
+     "iou_info": 1.0,
+     "pass": true
+    }
+   }
+  },
+  "angry": {
+   "L": {
+    "white": {
+     "iou": 1.0,
+     "bmean": 0.0,
+     "bmax": 0.0,
+     "bp99": 0.0,
+     "pass": true
+    },
+    "pupil": {
+     "iou": 1.0,
+     "biou": 1.0,
+     "de": {
+      "mean": 0.0,
+      "p95": 0.0,
+      "n": 875
+     },
+     "comps": [
+      1,
+      1
+     ],
+     "area": [
+      1174,
+      1174
+     ],
+     "empty": false,
+     "pass": true
+    },
+    "black": {
+     "cmean": 0.0,
+     "bmax": 0.0,
+     "p99": 0.0,
+     "comps": [
+      2,
+      2
+     ],
+     "euler": [
+      2,
+      2
+     ],
+     "iou_info": 1.0,
+     "pass": true
+    }
+   },
+   "R": {
+    "white": {
+     "iou": 1.0,
+     "bmean": 0.0,
+     "bmax": 0.0,
+     "bp99": 0.0,
+     "pass": true
+    },
+    "pupil": {
+     "iou": 1.0,
+     "biou": 1.0,
+     "de": {
+      "mean": 0.0,
+      "p95": 0.0,
+      "n": 873
+     },
+     "comps": [
+      1,
+      1
+     ],
+     "area": [
+      1172,
+      1172
+     ],
+     "empty": false,
+     "pass": true
+    },
+    "black": {
+     "cmean": 0.0,
+     "bmax": 0.0,
+     "p99": 0.0,
+     "comps": [
+      3,
+      3
+     ],
+     "euler": [
+      3,
+      3
+     ],
+     "iou_info": 1.0,
+     "pass": true
+    }
+   }
+  },
+  "sleepy": {
+   "L": {
+    "white": {
+     "iou": 1.0,
+     "bmean": 0.0,
+     "bmax": 0.0,
+     "bp99": 0.0,
+     "pass": true
+    },
+    "pupil": {
+     "iou": 1.0,
+     "biou": 1.0,
+     "de": {
+      "mean": 0.0,
+      "p95": 0.0,
+      "n": 0
+     },
+     "comps": [
+      0,
+      0
+     ],
+     "area": [
+      0,
+      0
+     ],
+     "empty": true,
+     "pass": true
+    },
+    "black": {
+     "cmean": 0.0,
+     "bmax": 0.0,
+     "p99": 0.0,
+     "comps": [
+      4,
+      4
+     ],
+     "euler": [
+      4,
+      4
+     ],
+     "iou_info": 1.0,
+     "pass": true
+    }
+   },
+   "R": {
+    "white": {
+     "iou": 1.0,
+     "bmean": 0.0,
+     "bmax": 0.0,
+     "bp99": 0.0,
+     "pass": true
+    },
+    "pupil": {
+     "iou": 1.0,
+     "biou": 1.0,
+     "de": {
+      "mean": 0.0,
+      "p95": 0.0,
+      "n": 0
+     },
+     "comps": [
+      0,
+      0
+     ],
+     "area": [
+      0,
+      0
+     ],
+     "empty": true,
+     "pass": true
+    },
+    "black": {
+     "cmean": 0.0,
+     "bmax": 0.0,
+     "p99": 0.0,
+     "comps": [
+      5,
+      5
+     ],
+     "euler": [
+      5,
+      5
+     ],
+     "iou_info": 1.0,
+     "pass": true
+    }
+   }
+  },
+  "smug": {
+   "L": {
+    "white": {
+     "iou": 1.0,
+     "bmean": 0.0,
+     "bmax": 0.0,
+     "bp99": 0.0,
+     "pass": true
+    },
+    "pupil": {
+     "iou": 1.0,
+     "biou": 1.0,
+     "de": {
+      "mean": 0.0,
+      "p95": 0.0,
+      "n": 1468
+     },
+     "comps": [
+      1,
+      1
+     ],
+     "area": [
+      1863,
+      1863
+     ],
+     "empty": false,
+     "pass": true
+    },
+    "black": {
+     "cmean": 0.0,
+     "bmax": 0.0,
+     "p99": 0.0,
+     "comps": [
+      2,
+      2
+     ],
+     "euler": [
+      2,
+      2
+     ],
+     "iou_info": 1.0,
+     "pass": true
+    }
+   },
+   "R": {
+    "white": {
+     "iou": 1.0,
+     "bmean": 0.0,
+     "bmax": 0.0,
+     "bp99": 0.0,
+     "pass": true
+    },
+    "pupil": {
+     "iou": 1.0,
+     "biou": 1.0,
+     "de": {
+      "mean": 0.0,
+      "p95": 0.0,
+      "n": 1408
+     },
+     "comps": [
+      1,
+      1
+     ],
+     "area": [
+      1801,
+      1801
+     ],
+     "empty": false,
+     "pass": true
+    },
+    "black": {
+     "cmean": 0.0,
+     "bmax": 0.0,
+     "p99": 0.0,
+     "comps": [
+      2,
+      2
+     ],
+     "euler": [
+      2,
+      2
+     ],
+     "iou_info": 1.0,
+     "pass": true
+    }
+   }
+  },
+  "furious": {
+   "L": {
+    "white": {
+     "iou": 1.0,
+     "bmean": 0.0,
+     "bmax": 0.0,
+     "bp99": 0.0,
+     "pass": true
+    },
+    "pupil": {
+     "iou": 1.0,
+     "biou": 1.0,
+     "de": {
+      "mean": 0.0,
+      "p95": 0.0,
+      "n": 0
+     },
+     "comps": [
+      0,
+      0
+     ],
+     "area": [
+      0,
+      0
+     ],
+     "empty": true,
+     "pass": true
+    },
+    "black": {
+     "cmean": 0.0,
+     "bmax": 0.0,
+     "p99": 0.0,
+     "comps": [
+      4,
+      4
+     ],
+     "euler": [
+      4,
+      4
+     ],
+     "iou_info": 1.0,
+     "pass": true
+    }
+   },
+   "R": {
+    "white": {
+     "iou": 1.0,
+     "bmean": 0.0,
+     "bmax": 0.0,
+     "bp99": 0.0,
+     "pass": true
+    },
+    "pupil": {
+     "iou": 1.0,
+     "biou": 1.0,
+     "de": {
+      "mean": 0.0,
+      "p95": 0.0,
+      "n": 0
+     },
+     "comps": [
+      0,
+      0
+     ],
+     "area": [
+      0,
+      0
+     ],
+     "empty": true,
+     "pass": true
+    },
+    "black": {
+     "cmean": 0.0,
+     "bmax": 0.0,
+     "p99": 0.0,
+     "comps": [
+      6,
+      6
+     ],
+     "euler": [
+      6,
+      6
+     ],
+     "iou_info": 1.0,
+     "pass": true
+    }
+   }
+  },
+  "starry": {
+   "L": {
+    "white": {
+     "iou": 1.0,
+     "bmean": 0.0,
+     "bmax": 0.0,
+     "bp99": 0.0,
+     "pass": true
+    },
+    "pupil": {
+     "iou": 1.0,
+     "biou": 1.0,
+     "de": {
+      "mean": 0.0,
+      "p95": 0.0,
+      "n": 1339
+     },
+     "comps": [
+      1,
+      1
+     ],
+     "area": [
+      1863,
+      1863
+     ],
+     "empty": false,
+     "pass": true
+    },
+    "black": {
+     "cmean": 0.0,
+     "bmax": 0.0,
+     "p99": 0.0,
+     "comps": [
+      4,
+      4
+     ],
+     "euler": [
+      4,
+      4
+     ],
+     "iou_info": 1.0,
+     "pass": true
+    }
+   },
+   "R": {
+    "white": {
+     "iou": 1.0,
+     "bmean": 0.0,
+     "bmax": 0.0,
+     "bp99": 0.0,
+     "pass": true
+    },
+    "pupil": {
+     "iou": 1.0,
+     "biou": 1.0,
+     "de": {
+      "mean": 0.0,
+      "p95": 0.0,
+      "n": 1284
+     },
+     "comps": [
+      1,
+      1
+     ],
+     "area": [
+      1782,
+      1782
+     ],
+     "empty": false,
+     "pass": true
+    },
+    "black": {
+     "cmean": 0.0,
+     "bmax": 0.0,
+     "p99": 0.0,
+     "comps": [
+      3,
+      3
+     ],
+     "euler": [
+      3,
+      3
+     ],
+     "iou_info": 1.0,
+     "pass": true
+    }
+   }
+  },
+  "pleading": {
+   "L": {
+    "white": {
+     "iou": 1.0,
+     "bmean": 0.0,
+     "bmax": 0.0,
+     "bp99": 0.0,
+     "pass": true
+    },
+    "pupil": {
+     "iou": 1.0,
+     "biou": 1.0,
+     "de": {
+      "mean": 0.0,
+      "p95": 0.0,
+      "n": 3375
+     },
+     "comps": [
+      1,
+      1
+     ],
+     "area": [
+      3994,
+      3994
+     ],
+     "empty": false,
+     "pass": true
+    },
+    "black": {
+     "cmean": 0.0,
+     "bmax": 0.0,
+     "p99": 0.0,
+     "comps": [
+      2,
+      2
+     ],
+     "euler": [
+      2,
+      2
+     ],
+     "iou_info": 1.0,
+     "pass": true
+    }
+   },
+   "R": {
+    "white": {
+     "iou": 1.0,
+     "bmean": 0.0,
+     "bmax": 0.0,
+     "bp99": 0.0,
+     "pass": true
+    },
+    "pupil": {
+     "iou": 1.0,
+     "biou": 1.0,
+     "de": {
+      "mean": 0.0,
+      "p95": 0.0,
+      "n": 3376
+     },
+     "comps": [
+      1,
+      1
+     ],
+     "area": [
+      3992,
+      3992
+     ],
+     "empty": false,
+     "pass": true
+    },
+    "black": {
+     "cmean": 0.0,
+     "bmax": 0.0,
+     "p99": 0.0,
+     "comps": [
+      3,
+      3
+     ],
+     "euler": [
+      3,
+      3
+     ],
+     "iou_info": 1.0,
+     "pass": true
+    }
+   }
+  },
+  "love": {
+   "L": {
+    "white": {
+     "iou": 1.0,
+     "bmean": 0.0,
+     "bmax": 0.0,
+     "bp99": 0.0,
+     "pass": true
+    },
+    "pupil": {
+     "iou": 1.0,
+     "biou": 1.0,
+     "de": {
+      "mean": 0.0,
+      "p95": 0.0,
+      "n": 1921
+     },
+     "comps": [
+      1,
+      1
+     ],
+     "area": [
+      2349,
+      2349
+     ],
+     "empty": false,
+     "pass": true
+    },
+    "black": {
+     "cmean": 0.0,
+     "bmax": 0.0,
+     "p99": 0.0,
+     "comps": [
+      2,
+      2
+     ],
+     "euler": [
+      2,
+      2
+     ],
+     "iou_info": 1.0,
+     "pass": true
+    }
+   },
+   "R": {
+    "white": {
+     "iou": 1.0,
+     "bmean": 0.0,
+     "bmax": 0.0,
+     "bp99": 0.0,
+     "pass": true
+    },
+    "pupil": {
+     "iou": 1.0,
+     "biou": 1.0,
+     "de": {
+      "mean": 0.0,
+      "p95": 0.0,
+      "n": 1864
+     },
+     "comps": [
+      1,
+      1
+     ],
+     "area": [
+      2293,
+      2293
+     ],
+     "empty": false,
+     "pass": true
+    },
+    "black": {
+     "cmean": 0.0,
+     "bmax": 0.0,
+     "p99": 0.0,
+     "comps": [
+      2,
+      2
+     ],
+     "euler": [
+      2,
+      2
+     ],
+     "iou_info": 1.0,
+     "pass": true
+    }
+   }
+  },
+  "dizzy": {
+   "L": {
+    "white": {
+     "iou": 1.0,
+     "bmean": 0.0,
+     "bmax": 0.0,
+     "bp99": 0.0,
+     "pass": true
+    },
+    "pupil": {
+     "iou": 1.0,
+     "biou": 1.0,
+     "de": {
+      "mean": 0.0,
+      "p95": 0.0,
+      "n": 0
+     },
+     "comps": [
+      0,
+      0
+     ],
+     "area": [
+      0,
+      0
+     ],
+     "empty": true,
+     "pass": true
+    },
+    "black": {
+     "cmean": 0.0,
+     "bmax": 0.0,
+     "p99": 0.0,
+     "comps": [
+      4,
+      4
+     ],
+     "euler": [
+      4,
+      4
+     ],
+     "iou_info": 1.0,
+     "pass": true
+    }
+   },
+   "R": {
+    "white": {
+     "iou": 1.0,
+     "bmean": 0.0,
+     "bmax": 0.0,
+     "bp99": 0.0,
+     "pass": true
+    },
+    "pupil": {
+     "iou": 1.0,
+     "biou": 1.0,
+     "de": {
+      "mean": 0.0,
+      "p95": 0.0,
+      "n": 0
+     },
+     "comps": [
+      0,
+      0
+     ],
+     "area": [
+      0,
+      0
+     ],
+     "empty": true,
+     "pass": true
+    },
+    "black": {
+     "cmean": 0.0,
+     "bmax": 0.0,
+     "p99": 0.0,
+     "comps": [
+      4,
+      4
+     ],
+     "euler": [
+      4,
+      4
+     ],
+     "iou_info": 1.0,
+     "pass": true
+    }
+   }
+  },
+  "blush": {
+   "L": {
+    "white": {
+     "iou": 1.0,
+     "bmean": 0.0,
+     "bmax": 0.0,
+     "bp99": 0.0,
+     "pass": true
+    },
+    "pupil": {
+     "iou": 1.0,
+     "biou": 1.0,
+     "de": {
+      "mean": 0.0,
+      "p95": 0.0,
+      "n": 0
+     },
+     "comps": [
+      0,
+      0
+     ],
+     "area": [
+      0,
+      0
+     ],
+     "empty": true,
+     "pass": true
+    },
+    "black": {
+     "cmean": 0.0,
+     "bmax": 0.0,
+     "p99": 0.0,
+     "comps": [
+      4,
+      4
+     ],
+     "euler": [
+      4,
+      4
+     ],
+     "iou_info": 1.0,
+     "pass": true
+    }
+   },
+   "R": {
+    "white": {
+     "iou": 1.0,
+     "bmean": 0.0,
+     "bmax": 0.0,
+     "bp99": 0.0,
+     "pass": true
+    },
+    "pupil": {
+     "iou": 1.0,
+     "biou": 1.0,
+     "de": {
+      "mean": 0.0,
+      "p95": 0.0,
+      "n": 0
+     },
+     "comps": [
+      0,
+      0
+     ],
+     "area": [
+      0,
+      0
+     ],
+     "empty": true,
+     "pass": true
+    },
+    "black": {
+     "cmean": 0.0,
+     "bmax": 0.0,
+     "p99": 0.0,
+     "comps": [
+      4,
+      4
+     ],
+     "euler": [
+      4,
+      4
+     ],
+     "iou_info": 1.0,
+     "pass": true
+    }
+   }
+  }
+ },
+ "leak": {
+  "debug_sweep": {
+   "cheerful": {
+    "frames": 210,
+    "leak_px": 0,
+    "leak_frames": 0,
+    "max_clipped": 5,
+    "rest_clipped": 0,
+    "swaps": [
+     {
+      "t": 3116.7,
+      "from": "cheerful",
+      "to": "confident",
+      "closure": 1.28,
+      "pop": false
+     }
+    ],
+    "swap_at_frame": 180,
+    "swap_ok": true,
+    "min_close_after_swap": -0.052,
+    "max_scale": 1
+   },
+   "confident": {
+    "frames": 210,
+    "leak_px": 0,
+    "leak_frames": 0,
+    "max_clipped": 1,
+    "rest_clipped": 0,
+    "swaps": [
+     {
+      "t": 3116.7,
+      "from": "confident",
+      "to": "bored",
+      "closure": 1.28,
+      "pop": false
+     }
+    ],
+    "swap_at_frame": 180,
+    "swap_ok": true,
+    "min_close_after_swap": -0.062,
+    "max_scale": 1
+   },
+   "bored": {
+    "frames": 210,
+    "leak_px": 0,
+    "leak_frames": 0,
+    "max_clipped": 0,
+    "rest_clipped": 0,
+    "swaps": [
+     {
+      "t": 3116.7,
+      "from": "bored",
+      "to": "angry",
+      "closure": 1.357,
+      "pop": false
+     }
+    ],
+    "swap_at_frame": 180,
+    "swap_ok": true,
+    "min_close_after_swap": -0.046,
+    "max_scale": 1
+   },
+   "angry": {
+    "frames": 210,
+    "leak_px": 0,
+    "leak_frames": 0,
+    "max_clipped": 2,
+    "rest_clipped": 0,
+    "swaps": [
+     {
+      "t": 3116.7,
+      "from": "angry",
+      "to": "sleepy",
+      "closure": 1.092,
+      "pop": false
+     }
+    ],
+    "swap_at_frame": 180,
+    "swap_ok": true,
+    "min_close_after_swap": -0.041,
+    "max_scale": 1
+   },
+   "sleepy": {
+    "frames": 210,
+    "leak_px": 0,
+    "leak_frames": 0,
+    "max_clipped": 14,
+    "rest_clipped": 0,
+    "swaps": [
+     {
+      "t": 3133.3,
+      "from": "sleepy",
+      "to": "smug",
+      "closure": 0.975,
+      "pop": false
+     }
+    ],
+    "swap_at_frame": 180,
+    "swap_ok": true,
+    "min_close_after_swap": -0.032,
+    "max_scale": 1
+   },
+   "smug": {
+    "frames": 210,
+    "leak_px": 0,
+    "leak_frames": 0,
+    "max_clipped": 10,
+    "rest_clipped": 0,
+    "swaps": [
+     {
+      "t": 3116.7,
+      "from": "smug",
+      "to": "furious",
+      "closure": 1.269,
+      "pop": true
+     }
+    ],
+    "swap_at_frame": 180,
+    "swap_ok": true,
+    "min_close_after_swap": -0.058,
+    "max_scale": 1
+   },
+   "furious": {
+    "frames": 210,
+    "leak_px": 0,
+    "leak_frames": 0,
+    "max_clipped": 4,
+    "rest_clipped": 0,
+    "swaps": [
+     {
+      "t": 3116.7,
+      "from": "furious",
+      "to": "starry",
+      "closure": 1.057,
+      "pop": true
+     }
+    ],
+    "swap_at_frame": 180,
+    "swap_ok": true,
+    "min_close_after_swap": -0.049,
+    "max_scale": 1.1348
+   },
+   "starry": {
+    "frames": 210,
+    "leak_px": 0,
+    "leak_frames": 0,
+    "max_clipped": 14,
+    "rest_clipped": 0,
+    "swaps": [
+     {
+      "t": 3116.7,
+      "from": "starry",
+      "to": "pleading",
+      "closure": 1.282,
+      "pop": false
+     }
+    ],
+    "swap_at_frame": 180,
+    "swap_ok": true,
+    "min_close_after_swap": -0.042,
+    "max_scale": 1.1005
+   },
+   "pleading": {
+    "frames": 210,
+    "leak_px": 0,
+    "leak_frames": 0,
+    "max_clipped": 24,
+    "rest_clipped": 5,
+    "swaps": [
+     {
+      "t": 3116.7,
+      "from": "pleading",
+      "to": "love",
+      "closure": 1.107,
+      "pop": true
+     }
+    ],
+    "swap_at_frame": 180,
+    "swap_ok": true,
+    "min_close_after_swap": -0.051,
+    "max_scale": 1.1514
+   },
+   "love": {
+    "frames": 210,
+    "leak_px": 0,
+    "leak_frames": 0,
+    "max_clipped": 5,
+    "rest_clipped": 0,
+    "swaps": [
+     {
+      "t": 3116.7,
+      "from": "love",
+      "to": "dizzy",
+      "closure": 1.28,
+      "pop": false
+     }
+    ],
+    "swap_at_frame": 180,
+    "swap_ok": true,
+    "min_close_after_swap": -0.052,
+    "max_scale": 1.1514
+   },
+   "dizzy": {
+    "frames": 210,
+    "leak_px": 0,
+    "leak_frames": 0,
+    "max_clipped": 23,
+    "rest_clipped": 3,
+    "swaps": [
+     {
+      "t": 3116.7,
+      "from": "dizzy",
+      "to": "blush",
+      "closure": 1.28,
+      "pop": false
+     }
+    ],
+    "swap_at_frame": 180,
+    "swap_ok": true,
+    "min_close_after_swap": -0.052,
+    "max_scale": 1
+   },
+   "blush": {
+    "frames": 210,
+    "leak_px": 0,
+    "leak_frames": 0,
+    "max_clipped": 0,
+    "rest_clipped": 0,
+    "swaps": [
+     {
+      "t": 3116.7,
+      "from": "blush",
+      "to": "cheerful",
+      "closure": 1.28,
+      "pop": false
+     }
+    ],
+    "swap_at_frame": 180,
+    "swap_ok": true,
+    "min_close_after_swap": -0.052,
+    "max_scale": 1
+   }
+  },
+  "debug_total_px": 0,
+  "debug_frames": 2520,
+  "note_debug": "the shader composites every moving layer inside the white-body coverage term (mv = mp*ab*(1-ao)), so this sweep is a structural check; the colour check below is independent of the shader debug path",
+  "colour_containment": {
+   "outside_px": 0,
+   "moving_px": 213098,
+   "dirs": [
+    "L",
+    "R",
+    "U",
+    "D",
+    "UL",
+    "UR",
+    "DL",
+    "DR"
+   ],
+   "per_emotion": {
+    "cheerful": {
+     "L": {
+      "L": 0,
+      "R": 0
+     },
+     "R": {
+      "L": 0,
+      "R": 0
+     },
+     "U": {
+      "L": 0,
+      "R": 0
+     },
+     "D": {
+      "L": 0,
+      "R": 0
+     },
+     "UL": {
+      "L": 0,
+      "R": 0
+     },
+     "UR": {
+      "L": 0,
+      "R": 0
+     },
+     "DL": {
+      "L": 0,
+      "R": 0
+     },
+     "DR": {
+      "L": 0,
+      "R": 0
+     }
+    },
+    "confident": {
+     "L": {
+      "L": 0,
+      "R": 0
+     },
+     "R": {
+      "L": 0,
+      "R": 0
+     },
+     "U": {
+      "L": 0,
+      "R": 0
+     },
+     "D": {
+      "L": 0,
+      "R": 0
+     },
+     "UL": {
+      "L": 0,
+      "R": 0
+     },
+     "UR": {
+      "L": 0,
+      "R": 0
+     },
+     "DL": {
+      "L": 0,
+      "R": 0
+     },
+     "DR": {
+      "L": 0,
+      "R": 0
+     }
+    },
+    "bored": {
+     "L": {
+      "L": 0,
+      "R": 0
+     },
+     "R": {
+      "L": 0,
+      "R": 0
+     },
+     "U": {
+      "L": 0,
+      "R": 0
+     },
+     "D": {
+      "L": 0,
+      "R": 0
+     },
+     "UL": {
+      "L": 0,
+      "R": 0
+     },
+     "UR": {
+      "L": 0,
+      "R": 0
+     },
+     "DL": {
+      "L": 0,
+      "R": 0
+     },
+     "DR": {
+      "L": 0,
+      "R": 0
+     }
+    },
+    "angry": {
+     "L": {
+      "L": 0,
+      "R": 0
+     },
+     "R": {
+      "L": 0,
+      "R": 0
+     },
+     "U": {
+      "L": 0,
+      "R": 0
+     },
+     "D": {
+      "L": 0,
+      "R": 0
+     },
+     "UL": {
+      "L": 0,
+      "R": 0
+     },
+     "UR": {
+      "L": 0,
+      "R": 0
+     },
+     "DL": {
+      "L": 0,
+      "R": 0
+     },
+     "DR": {
+      "L": 0,
+      "R": 0
+     }
+    },
+    "sleepy": {
+     "L": {
+      "L": 0,
+      "R": 0
+     },
+     "R": {
+      "L": 0,
+      "R": 0
+     },
+     "U": {
+      "L": 0,
+      "R": 0
+     },
+     "D": {
+      "L": 0,
+      "R": 0
+     },
+     "UL": {
+      "L": 0,
+      "R": 0
+     },
+     "UR": {
+      "L": 0,
+      "R": 0
+     },
+     "DL": {
+      "L": 0,
+      "R": 0
+     },
+     "DR": {
+      "L": 0,
+      "R": 0
+     }
+    },
+    "smug": {
+     "L": {
+      "L": 0,
+      "R": 0
+     },
+     "R": {
+      "L": 0,
+      "R": 0
+     },
+     "U": {
+      "L": 0,
+      "R": 0
+     },
+     "D": {
+      "L": 0,
+      "R": 0
+     },
+     "UL": {
+      "L": 0,
+      "R": 0
+     },
+     "UR": {
+      "L": 0,
+      "R": 0
+     },
+     "DL": {
+      "L": 0,
+      "R": 0
+     },
+     "DR": {
+      "L": 0,
+      "R": 0
+     }
+    },
+    "furious": {
+     "L": {
+      "L": 0,
+      "R": 0
+     },
+     "R": {
+      "L": 0,
+      "R": 0
+     },
+     "U": {
+      "L": 0,
+      "R": 0
+     },
+     "D": {
+      "L": 0,
+      "R": 0
+     },
+     "UL": {
+      "L": 0,
+      "R": 0
+     },
+     "UR": {
+      "L": 0,
+      "R": 0
+     },
+     "DL": {
+      "L": 0,
+      "R": 0
+     },
+     "DR": {
+      "L": 0,
+      "R": 0
+     }
+    },
+    "starry": {
+     "L": {
+      "L": 0,
+      "R": 0
+     },
+     "R": {
+      "L": 0,
+      "R": 0
+     },
+     "U": {
+      "L": 0,
+      "R": 0
+     },
+     "D": {
+      "L": 0,
+      "R": 0
+     },
+     "UL": {
+      "L": 0,
+      "R": 0
+     },
+     "UR": {
+      "L": 0,
+      "R": 0
+     },
+     "DL": {
+      "L": 0,
+      "R": 0
+     },
+     "DR": {
+      "L": 0,
+      "R": 0
+     }
+    },
+    "pleading": {
+     "L": {
+      "L": 0,
+      "R": 0
+     },
+     "R": {
+      "L": 0,
+      "R": 0
+     },
+     "U": {
+      "L": 0,
+      "R": 0
+     },
+     "D": {
+      "L": 0,
+      "R": 0
+     },
+     "UL": {
+      "L": 0,
+      "R": 0
+     },
+     "UR": {
+      "L": 0,
+      "R": 0
+     },
+     "DL": {
+      "L": 0,
+      "R": 0
+     },
+     "DR": {
+      "L": 0,
+      "R": 0
+     }
+    },
+    "love": {
+     "L": {
+      "L": 0,
+      "R": 0
+     },
+     "R": {
+      "L": 0,
+      "R": 0
+     },
+     "U": {
+      "L": 0,
+      "R": 0
+     },
+     "D": {
+      "L": 0,
+      "R": 0
+     },
+     "UL": {
+      "L": 0,
+      "R": 0
+     },
+     "UR": {
+      "L": 0,
+      "R": 0
+     },
+     "DL": {
+      "L": 0,
+      "R": 0
+     },
+     "DR": {
+      "L": 0,
+      "R": 0
+     }
+    },
+    "dizzy": {
+     "L": {
+      "L": 0,
+      "R": 0
+     },
+     "R": {
+      "L": 0,
+      "R": 0
+     },
+     "U": {
+      "L": 0,
+      "R": 0
+     },
+     "D": {
+      "L": 0,
+      "R": 0
+     },
+     "UL": {
+      "L": 0,
+      "R": 0
+     },
+     "UR": {
+      "L": 0,
+      "R": 0
+     },
+     "DL": {
+      "L": 0,
+      "R": 0
+     },
+     "DR": {
+      "L": 0,
+      "R": 0
+     }
+    },
+    "blush": {
+     "L": {
+      "L": 0,
+      "R": 0
+     },
+     "R": {
+      "L": 0,
+      "R": 0
+     },
+     "U": {
+      "L": 0,
+      "R": 0
+     },
+     "D": {
+      "L": 0,
+      "R": 0
+     },
+     "UL": {
+      "L": 0,
+      "R": 0
+     },
+     "UR": {
+      "L": 0,
+      "R": 0
+     },
+     "DL": {
+      "L": 0,
+      "R": 0
+     },
+     "DR": {
+      "L": 0,
+      "R": 0
+     }
+    }
+   }
+  }
+ },
+ "swap_timing": [
+  {
+   "frm": "cheerful",
+   "to": "confident",
+   "pop": false,
+   "swap_closure": 1.069,
+   "close_ms": 33,
+   "reopen_ms": 167,
+   "total_ms": 217,
+   "overshoot": 0.041
+  },
+  {
+   "frm": "confident",
+   "to": "bored",
+   "pop": false,
+   "swap_closure": 1.084,
+   "close_ms": 33,
+   "reopen_ms": 200,
+   "total_ms": 250,
+   "overshoot": 0.055
+  },
+  {
+   "frm": "bored",
+   "to": "love",
+   "pop": true,
+   "swap_closure": 0.974,
+   "close_ms": 33,
+   "reopen_ms": 150,
+   "total_ms": 200,
+   "overshoot": 0.051
+  },
+  {
+   "frm": "love",
+   "to": "starry",
+   "pop": true,
+   "swap_closure": 0.974,
+   "close_ms": 33,
+   "reopen_ms": 150,
+   "total_ms": 200,
+   "overshoot": 0.051
+  },
+  {
+   "frm": "starry",
+   "to": "dizzy",
+   "pop": false,
+   "swap_closure": 1.084,
+   "close_ms": 33,
+   "reopen_ms": 167,
+   "total_ms": 217,
+   "overshoot": 0.04
+  },
+  {
+   "frm": "dizzy",
+   "to": "sleepy",
+   "pop": false,
+   "swap_closure": 1.084,
+   "close_ms": 33,
+   "reopen_ms": 217,
+   "total_ms": 267,
+   "overshoot": 0.047
+  },
+  {
+   "frm": "sleepy",
+   "to": "pleading",
+   "pop": false,
+   "swap_closure": 1.084,
+   "close_ms": 33,
+   "reopen_ms": 167,
+   "total_ms": 217,
+   "overshoot": 0.041
+  }
+ ],
+ "calibration": {
+  "note": "Thresholds from /workspace/research/polly-eyes-research.md (proposal table). Calibrated with negative controls on the reference cells: identity passes every gate; a 1 px shift must fail; a ~3 dE00 pupil tint must fail.",
+  "identity_all_pass": true,
+  "shift1px_white_fail": 12,
+  "shift1px_black_fail": 9,
+  "shift1px_pupil_fail": 8,
+  "tint_dE3_pupil_fail": 8,
+  "emotions_with_coloured_pupil": 8,
+  "artist_L_vs_R_pupil_dE00": {
+   "cheerful": 2.08,
+   "confident": 0.38,
+   "bored": 1.03,
+   "angry": 0.7,
+   "smug": 0.4,
+   "starry": 0.57,
+   "pleading": 0.92,
+   "love": 0.85
+  },
+  "dE_threshold_rationale": "dE00 <= 2 (mean over the 2-px-eroded interior): ~1 = JND, the artist's own L-vs-R pupil fill differs by 0.38-2.08 dE00 (median ~0.8), a 3.5 L* tint (~3 dE00) fails on all 8 coloured-pupil emotions",
+  "known_weakness": "black chamfer-mean <= .35 px passes a pure 1 px horizontal shift on 3/12 emotions (horizontal strokes do not move); the max <= 1 px and topology terms do not catch it either. The black gate is therefore necessary, not sufficient; the overlay sheet is the visual check.",
+  "per_emotion": {
+   "cheerful": {
+    "identity": {
+     "white_pass": true,
+     "white_iou": 1.0,
+     "white_bmax": 0.0,
+     "pupil_pass": true,
+     "pupil_iou": 1.0,
+     "pupil_de": 0.0,
+     "black_pass": true,
+     "black_cmean": 0.0,
+     "black_bmax": 0.0
+    },
+    "shift1px": {
+     "white_pass": false,
+     "white_iou": 0.9748161077172423,
+     "white_bmax": 1.0,
+     "pupil_pass": false,
+     "pupil_iou": 0.7213114754098361,
+     "pupil_de": 2.7923934495755978,
+     "black_pass": false,
+     "black_cmean": 0.6617647058823529,
+     "black_bmax": 28.0
+    },
+    "pupil_dE3": {
+     "white_pass": true,
+     "white_iou": 0.9997392891283566,
+     "white_bmax": 1.0,
+     "pupil_pass": false,
+     "pupil_iou": 0.9926650366748166,
+     "pupil_de": 3.404804770770904,
+     "black_pass": true,
+     "black_cmean": 0.0,
+     "black_bmax": 0.0
+    },
+    "artist_LR_dE00": 2.0751072070456287
+   },
+   "confident": {
+    "identity": {
+     "white_pass": true,
+     "white_iou": 1.0,
+     "white_bmax": 0.0,
+     "pupil_pass": true,
+     "pupil_iou": 1.0,
+     "pupil_de": 0.0,
+     "black_pass": true,
+     "black_cmean": 0.0,
+     "black_bmax": 0.0
+    },
+    "shift1px": {
+     "white_pass": false,
+     "white_iou": 0.9734563405357287,
+     "white_bmax": 1.0,
+     "pupil_pass": false,
+     "pupil_iou": 0.9405379896177443,
+     "pupil_de": 2.727574049745676,
+     "black_pass": false,
+     "black_cmean": 0.64,
+     "black_bmax": 44.0
+    },
+    "pupil_dE3": {
+     "white_pass": false,
+     "white_iou": 0.9989332895708541,
+     "white_bmax": 2.0,
+     "pupil_pass": false,
+     "pupil_iou": 0.9915492957746479,
+     "pupil_de": 2.8984256888209186,
+     "black_pass": true,
+     "black_cmean": 0.008237232289950576,
+     "black_bmax": 1.0
+    },
+    "artist_LR_dE00": 0.381111906918996
+   },
+   "bored": {
+    "identity": {
+     "white_pass": true,
+     "white_iou": 1.0,
+     "white_bmax": 0.0,
+     "pupil_pass": true,
+     "pupil_iou": 1.0,
+     "pupil_de": 0.0,
+     "black_pass": true,
+     "black_cmean": 0.0,
+     "black_bmax": 0.0
+    },
+    "shift1px": {
+     "white_pass": false,
+     "white_iou": 0.9762698720434276,
+     "white_bmax": 5.385164807134504,
+     "pupil_pass": false,
+     "pupil_iou": 0.9365079365079365,
+     "pupil_de": 2.6811633462270064,
+     "black_pass": false,
+     "black_cmean": 0.3299457021338574,
+     "black_bmax": 2.23606797749979
+    },
+    "pupil_dE3": {
+     "white_pass": true,
+     "white_iou": 0.9989608313349321,
+     "white_bmax": 1.0,
+     "pupil_pass": false,
+     "pupil_iou": 0.9898373983739838,
+     "pupil_de": 2.91054007878718,
+     "black_pass": true,
+     "black_cmean": 0.003194888178913738,
+     "black_bmax": 1.0
+    },
+    "artist_LR_dE00": 1.0327207276851667
+   },
+   "angry": {
+    "identity": {
+     "white_pass": true,
+     "white_iou": 1.0,
+     "white_bmax": 0.0,
+     "pupil_pass": true,
+     "pupil_iou": 1.0,
+     "pupil_de": 0.0,
+     "black_pass": true,
+     "black_cmean": 0.0,
+     "black_bmax": 0.0
+    },
+    "shift1px": {
+     "white_pass": false,
+     "white_iou": 0.9698019801980198,
+     "white_bmax": 13.152946437965905,
+     "pupil_pass": false,
+     "pupil_iou": 0.9356966199505359,
+     "pupil_de": 2.1982809607520424,
+     "black_pass": false,
+     "black_cmean": 0.3055555555555556,
+     "black_bmax": 6.0
+    },
+    "pupil_dE3": {
+     "white_pass": false,
+     "white_iou": 0.9976331360946745,
+     "white_bmax": 1.4142135623730951,
+     "pupil_pass": false,
+     "pupil_iou": 0.9788494077834179,
+     "pupil_de": 2.3870819861756556,
+     "black_pass": true,
+     "black_cmean": 0.020250723240115717,
+     "black_bmax": 1.0
+    },
+    "artist_LR_dE00": 0.7038155121822931
+   },
+   "sleepy": {
+    "identity": {
+     "white_pass": true,
+     "white_iou": 1.0,
+     "white_bmax": 0.0,
+     "pupil_pass": true,
+     "pupil_iou": 1.0,
+     "pupil_de": 0.0,
+     "black_pass": true,
+     "black_cmean": 0.0,
+     "black_bmax": 0.0
+    },
+    "shift1px": {
+     "white_pass": false,
+     "white_iou": 0.9806609547123623,
+     "white_bmax": 1.0,
+     "pupil_pass": true,
+     "pupil_iou": 1.0,
+     "pupil_de": 0.0,
+     "black_pass": false,
+     "black_cmean": 0.636215334420881,
+     "black_bmax": 32.0
+    },
+    "pupil_dE3": {
+     "white_pass": true,
+     "white_iou": 1.0,
+     "white_bmax": 0.0,
+     "pupil_pass": true,
+     "pupil_iou": 1.0,
+     "pupil_de": 0.0,
+     "black_pass": true,
+     "black_cmean": 0.0,
+     "black_bmax": 0.0
+    }
+   },
+   "smug": {
+    "identity": {
+     "white_pass": true,
+     "white_iou": 1.0,
+     "white_bmax": 0.0,
+     "pupil_pass": true,
+     "pupil_iou": 1.0,
+     "pupil_de": 0.0,
+     "black_pass": true,
+     "black_cmean": 0.0,
+     "black_bmax": 0.0
+    },
+    "shift1px": {
+     "white_pass": false,
+     "white_iou": 0.9728303362001564,
+     "white_bmax": 1.0,
+     "pupil_pass": false,
+     "pupil_iou": 0.9375975039001561,
+     "pupil_de": 2.144705815756885,
+     "black_pass": true,
+     "black_cmean": 0.12890625,
+     "black_bmax": 1.0
+    },
+    "pupil_dE3": {
+     "white_pass": false,
+     "white_iou": 0.9890249877511024,
+     "white_bmax": 3.0,
+     "pupil_pass": false,
+     "pupil_iou": 0.8817323709050527,
+     "pupil_de": 2.9839439736311135,
+     "black_pass": false,
+     "black_cmean": 0.030703469357640772,
+     "black_bmax": 2.23606797749979
+    },
+    "artist_LR_dE00": 0.39719120683678777
+   },
+   "furious": {
+    "identity": {
+     "white_pass": true,
+     "white_iou": 1.0,
+     "white_bmax": 0.0,
+     "pupil_pass": true,
+     "pupil_iou": 1.0,
+     "pupil_de": 0.0,
+     "black_pass": true,
+     "black_cmean": 0.0,
+     "black_bmax": 0.0
+    },
+    "shift1px": {
+     "white_pass": false,
+     "white_iou": 0.9704148719111313,
+     "white_bmax": 1.0,
+     "pupil_pass": true,
+     "pupil_iou": 1.0,
+     "pupil_de": 0.0,
+     "black_pass": false,
+     "black_cmean": 1.7770390353284158,
+     "black_bmax": 48.83646178829912
+    },
+    "pupil_dE3": {
+     "white_pass": true,
+     "white_iou": 1.0,
+     "white_bmax": 0.0,
+     "pupil_pass": true,
+     "pupil_iou": 1.0,
+     "pupil_de": 0.0,
+     "black_pass": true,
+     "black_cmean": 0.0,
+     "black_bmax": 0.0
+    }
+   },
+   "starry": {
+    "identity": {
+     "white_pass": true,
+     "white_iou": 1.0,
+     "white_bmax": 0.0,
+     "pupil_pass": true,
+     "pupil_iou": 1.0,
+     "pupil_de": 0.0,
+     "black_pass": true,
+     "black_cmean": 0.0,
+     "black_bmax": 0.0
+    },
+    "shift1px": {
+     "white_pass": false,
+     "white_iou": 0.9676854504934734,
+     "white_bmax": 1.0,
+     "pupil_pass": false,
+     "pupil_iou": 0.9235931853381518,
+     "pupil_de": 2.7553181081769926,
+     "black_pass": false,
+     "black_cmean": 0.4714285714285714,
+     "black_bmax": 5.0
+    },
+    "pupil_dE3": {
+     "white_pass": true,
+     "white_iou": 0.9967168481742473,
+     "white_bmax": 1.0,
+     "pupil_pass": false,
+     "pupil_iou": 0.9774477447744775,
+     "pupil_de": 3.0130239188001906,
+     "black_pass": true,
+     "black_cmean": 0.0,
+     "black_bmax": 0.0
+    },
+    "artist_LR_dE00": 0.5710611838420323
+   },
+   "pleading": {
+    "identity": {
+     "white_pass": true,
+     "white_iou": 1.0,
+     "white_bmax": 0.0,
+     "pupil_pass": true,
+     "pupil_iou": 1.0,
+     "pupil_de": 0.0,
+     "black_pass": true,
+     "black_cmean": 0.0,
+     "black_bmax": 0.0
+    },
+    "shift1px": {
+     "white_pass": false,
+     "white_iou": 0.9587965990843689,
+     "white_bmax": 1.0,
+     "pupil_pass": false,
+     "pupil_iou": 0.9578224619911722,
+     "pupil_de": 2.1867925931148977,
+     "black_pass": true,
+     "black_cmean": 0.3215223097112861,
+     "black_bmax": 1.0
+    },
+    "pupil_dE3": {
+     "white_pass": true,
+     "white_iou": 0.998451871414261,
+     "white_bmax": 1.0,
+     "pupil_pass": false,
+     "pupil_iou": 0.9957414829659319,
+     "pupil_de": 2.7640480227620485,
+     "black_pass": true,
+     "black_cmean": 0.001564945226917058,
+     "black_bmax": 1.0
+    },
+    "artist_LR_dE00": 0.9240243015916046
+   },
+   "love": {
+    "identity": {
+     "white_pass": true,
+     "white_iou": 1.0,
+     "white_bmax": 0.0,
+     "pupil_pass": true,
+     "pupil_iou": 1.0,
+     "pupil_de": 0.0,
+     "black_pass": true,
+     "black_cmean": 0.0,
+     "black_bmax": 0.0
+    },
+    "shift1px": {
+     "white_pass": false,
+     "white_iou": 0.9530116110304789,
+     "white_bmax": 1.0,
+     "pupil_pass": false,
+     "pupil_iou": 0.953983809118023,
+     "pupil_de": 2.3933413007430415,
+     "black_pass": true,
+     "black_cmean": 0.26125,
+     "black_bmax": 1.0
+    },
+    "pupil_dE3": {
+     "white_pass": false,
+     "white_iou": 0.9975867829961017,
+     "white_bmax": 7.0,
+     "pupil_pass": false,
+     "pupil_iou": 0.988734835355286,
+     "pupil_de": 2.9760421285058754,
+     "black_pass": true,
+     "black_cmean": 0.0,
+     "black_bmax": 0.0
+    },
+    "artist_LR_dE00": 0.8464095882571966
+   },
+   "dizzy": {
+    "identity": {
+     "white_pass": true,
+     "white_iou": 1.0,
+     "white_bmax": 0.0,
+     "pupil_pass": true,
+     "pupil_iou": 1.0,
+     "pupil_de": 0.0,
+     "black_pass": true,
+     "black_cmean": 0.0,
+     "black_bmax": 0.0
+    },
+    "shift1px": {
+     "white_pass": false,
+     "white_iou": 0.9540706207372874,
+     "white_bmax": 1.0,
+     "pupil_pass": true,
+     "pupil_iou": 1.0,
+     "pupil_de": 0.0,
+     "black_pass": false,
+     "black_cmean": 0.4681372549019608,
+     "black_bmax": 1.0
+    },
+    "pupil_dE3": {
+     "white_pass": true,
+     "white_iou": 1.0,
+     "white_bmax": 0.0,
+     "pupil_pass": true,
+     "pupil_iou": 1.0,
+     "pupil_de": 0.0,
+     "black_pass": true,
+     "black_cmean": 0.0,
+     "black_bmax": 0.0
+    }
+   },
+   "blush": {
+    "identity": {
+     "white_pass": true,
+     "white_iou": 1.0,
+     "white_bmax": 0.0,
+     "pupil_pass": true,
+     "pupil_iou": 1.0,
+     "pupil_de": 0.0,
+     "black_pass": true,
+     "black_cmean": 0.0,
+     "black_bmax": 0.0
+    },
+    "shift1px": {
+     "white_pass": false,
+     "white_iou": 0.9785896092229376,
+     "white_bmax": 1.0,
+     "pupil_pass": true,
+     "pupil_iou": 1.0,
+     "pupil_de": 0.0,
+     "black_pass": false,
+     "black_cmean": 0.45681381957773515,
+     "black_bmax": 1.0
+    },
+    "pupil_dE3": {
+     "white_pass": true,
+     "white_iou": 1.0,
+     "white_bmax": 0.0,
+     "pupil_pass": true,
+     "pupil_iou": 1.0,
+     "pupil_de": 0.0,
+     "black_pass": true,
+     "black_cmean": 0.0,
+     "black_bmax": 0.0
+    }
+   }
+  }
+ },
+ "sdf_magnification": {
+  "note": "offline decode of the single-channel SDF cells exactly like the shader (bilinear texel-centre sampling, step at .5) vs the exact masks upsampled nearest; distances in source px; k=1 is bit-exact by construction (d = +-.5 at the first texel centre either side of the edge)",
+  "worst": {
+   "white_k2": {
+    "mean": 0,
+    "p99": 0,
+    "max": 0,
+    "topo_fail": []
+   },
+   "white_k3": {
+    "mean": 0.06715136827224073,
+    "p99": 0.3333333333333333,
+    "max": 0.3333333333333333,
+    "topo_fail": []
+   },
+   "white_k4": {
+    "mean": 0.03788566243194193,
+    "p99": 0.25,
+    "max": 0.25,
+    "topo_fail": []
+   },
+   "pupil_k2": {
+    "mean": 0,
+    "p99": 0,
+    "max": 0,
+    "topo_fail": []
+   },
+   "pupil_k3": {
+    "mean": 0.06877022653721683,
+    "p99": 0.3333333333333333,
+    "max": 0.3333333333333333,
+    "topo_fail": []
+   },
+   "pupil_k4": {
+    "mean": 0.038636363636363635,
+    "p99": 0.25,
+    "max": 0.25,
+    "topo_fail": []
+   },
+   "outline_k2": {
+    "mean": 0,
+    "p99": 0,
+    "max": 0,
+    "topo_fail": []
+   },
+   "outline_k3": {
+    "mean": 0.06817691477885653,
+    "p99": 0.3333333333333333,
+    "max": 0.3333333333333333,
+    "topo_fail": []
+   },
+   "outline_k4": {
+    "mean": 0.03831231813773036,
+    "p99": 0.25,
+    "max": 0.25,
+    "topo_fail": []
+   },
+   "core_k2": {
+    "mean": 0,
+    "p99": 0,
+    "max": 0,
+    "topo_fail": []
+   },
+   "core_k3": {
+    "mean": 0.06718851924331376,
+    "p99": 0.3333333333333333,
+    "max": 0.3333333333333333,
+    "topo_fail": []
+   },
+   "core_k4": {
+    "mean": 0.0377906976744186,
+    "p99": 0.25,
+    "max": 0.25,
+    "topo_fail": []
+   }
+  },
+  "msdf_needed": false
+ },
+ "classic_regression": {
+  "note": "non-Polly shapes rendered on the live commit (22858db) vs this build, still pose, pixel diff",
+  "shapes": [
+   "stadium x3 (carbon/dark, glass, toon)",
+   "bean",
+   "dot",
+   "egg",
+   "oval",
+   "ref",
+   "squircle",
+   "toon",
+   "oval+toon/glass"
+  ],
+  "changed_px": 0
+ },
+ "errors": []
+}

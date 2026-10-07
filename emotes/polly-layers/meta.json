@@ -1,0 +1,2108 @@
+{
+ "thresholds": {
+  "black_max": 70,
+  "black_sat": 30,
+  "white_lum": 150,
+  "white_sat": 50,
+  "pupil_sat": 50,
+  "pupil_max": 90,
+  "touch_black": 4,
+  "touch_lash": 10,
+  "touch_pupil": 3,
+  "hl_ring": 0.5,
+  "core_out": 0.15
+ },
+ "hl_hull": [
+  "angry",
+  "bored",
+  "confident",
+  "love",
+  "smug"
+ ],
+ "ids": [
+  "cheerful",
+  "confident",
+  "bored",
+  "angry",
+  "sleepy",
+  "smug",
+  "furious",
+  "starry",
+  "pleading",
+  "love",
+  "dizzy",
+  "blush"
+ ],
+ "layers": [
+  "white",
+  "pupil",
+  "black"
+ ],
+ "note": "pupil layer = coloured pupil + highlights + CORE blacks (everything that moves with gaze); black layer = OUTLINE + CORE (all near-black ink). Coordinates: px in the reference cell (x right, y down); sprite px = ref px - bbox[0:2].",
+ "eyes": {
+  "cheerful": {
+   "L": {
+    "bbox": [
+     0,
+     82,
+     107,
+     239
+    ],
+    "size": [
+     107,
+     157
+    ],
+    "files": {
+     "white": "emotes/polly-layers/cheerful-L-white.png",
+     "pupil": "emotes/polly-layers/cheerful-L-pupil.png",
+     "black": "emotes/polly-layers/cheerful-L-black.png"
+    },
+    "area": {
+     "white": 11504,
+     "pupil": 409,
+     "black": 2392,
+     "pupil_colour": 409,
+     "highlight": 0,
+     "outline": 2392,
+     "core": 0,
+     "body": 11913
+    },
+    "centroid": {
+     "white": [
+      43.36,
+      164.14
+     ],
+     "body": [
+      44.83,
+      164.42
+     ],
+     "pupil": [
+      86.23,
+      172.34
+     ],
+     "black": [
+      56.76,
+      128.98
+     ],
+     "core": null
+    },
+    "bboxes": {
+     "white": [
+      0,
+      97,
+      107,
+      239
+     ],
+     "body": [
+      0,
+      97,
+      107,
+      239
+     ],
+     "pupil": [
+      69,
+      152,
+      101,
+      196
+     ],
+     "black": [
+      0,
+      82,
+      105,
+      239
+     ]
+    },
+    "pupil_rel_white": [
+     42.87,
+     8.2
+    ],
+    "pupil_rel_body": [
+     41.4,
+     7.92
+    ],
+    "anchor_ref": [
+     53.5,
+     168.0
+    ]
+   },
+   "R": {
+    "bbox": [
+     133,
+     82,
+     295,
+     239
+    ],
+    "size": [
+     162,
+     157
+    ],
+    "files": {
+     "white": "emotes/polly-layers/cheerful-R-white.png",
+     "pupil": "emotes/polly-layers/cheerful-R-pupil.png",
+     "black": "emotes/polly-layers/cheerful-R-black.png"
+    },
+    "area": {
+     "white": 15840,
+     "pupil": 420,
+     "black": 4175,
+     "pupil_colour": 420,
+     "highlight": 0,
+     "outline": 4175,
+     "core": 0,
+     "body": 16260
+    },
+    "centroid": {
+     "white": [
+      212.53,
+      166.74
+     ],
+     "body": [
+      211.04,
+      166.89
+     ],
+     "pupil": [
+      155.01,
+      172.54
+     ],
+     "black": [
+      220.16,
+      138.65
+     ],
+     "core": null
+    },
+    "bboxes": {
+     "white": [
+      133,
+      97,
+      283,
+      239
+     ],
+     "body": [
+      133,
+      97,
+      283,
+      239
+     ],
+     "pupil": [
+      141,
+      151,
+      173,
+      196
+     ],
+     "black": [
+      135,
+      82,
+      295,
+      239
+     ]
+    },
+    "pupil_rel_white": [
+     -57.52,
+     5.8
+    ],
+    "pupil_rel_body": [
+     -56.03,
+     5.65
+    ],
+    "anchor_ref": [
+     208.0,
+     168.0
+    ]
+   }
+  },
+  "confident": {
+   "L": {
+    "bbox": [
+     0,
+     111,
+     137,
+     252
+    ],
+    "size": [
+     137,
+     141
+    ],
+    "files": {
+     "white": "emotes/polly-layers/confident-L-white.png",
+     "pupil": "emotes/polly-layers/confident-L-pupil.png",
+     "black": "emotes/polly-layers/confident-L-black.png"
+    },
+    "area": {
+     "white": 12181,
+     "pupil": 2123,
+     "black": 3066,
+     "pupil_colour": 2123,
+     "highlight": 245,
+     "outline": 3066,
+     "core": 0,
+     "body": 14304
+    },
+    "centroid": {
+     "white": [
+      53.95,
+      187.87
+     ],
+     "body": [
+      61.37,
+      191.85
+     ],
+     "pupil": [
+      103.94,
+      214.66
+     ],
+     "black": [
+      74.44,
+      146.82
+     ],
+     "core": null
+    },
+    "bboxes": {
+     "white": [
+      0,
+      128,
+      137,
+      252
+     ],
+     "body": [
+      0,
+      128,
+      137,
+      252
+     ],
+     "pupil": [
+      82,
+      185,
+      126,
+      245
+     ],
+     "black": [
+      0,
+      111,
+      136,
+      252
+     ]
+    },
+    "pupil_rel_white": [
+     49.99,
+     26.79
+    ],
+    "pupil_rel_body": [
+     42.57,
+     22.81
+    ],
+    "anchor_ref": [
+     68.5,
+     190.0
+    ]
+   },
+   "R": {
+    "bbox": [
+     170,
+     111,
+     353,
+     252
+    ],
+    "size": [
+     183,
+     141
+    ],
+    "files": {
+     "white": "emotes/polly-layers/confident-R-white.png",
+     "pupil": "emotes/polly-layers/confident-R-pupil.png",
+     "black": "emotes/polly-layers/confident-R-black.png"
+    },
+    "area": {
+     "white": 14760,
+     "pupil": 2056,
+     "black": 4786,
+     "pupil_colour": 2056,
+     "highlight": 210,
+     "outline": 4786,
+     "core": 0,
+     "body": 16816
+    },
+    "centroid": {
+     "white": [
+      263.2,
+      191.3
+     ],
+     "body": [
+      255.56,
+      194.11
+     ],
+     "pupil": [
+      200.78,
+      214.26
+     ],
+     "black": [
+      266.51,
+      161.04
+     ],
+     "core": null
+    },
+    "bboxes": {
+     "white": [
+      170,
+      128,
+      339,
+      252
+     ],
+     "body": [
+      170,
+      128,
+      339,
+      252
+     ],
+     "pupil": [
+      181,
+      185,
+      223,
+      245
+     ],
+     "black": [
+      170,
+      111,
+      353,
+      252
+     ]
+    },
+    "pupil_rel_white": [
+     -62.42,
+     22.96
+    ],
+    "pupil_rel_body": [
+     -54.78,
+     20.15
+    ],
+    "anchor_ref": [
+     254.5,
+     190.0
+    ]
+   }
+  },
+  "bored": {
+   "L": {
+    "bbox": [
+     0,
+     115,
+     167,
+     247
+    ],
+    "size": [
+     167,
+     132
+    ],
+    "files": {
+     "white": "emotes/polly-layers/bored-L-white.png",
+     "pupil": "emotes/polly-layers/bored-L-pupil.png",
+     "black": "emotes/polly-layers/bored-L-black.png"
+    },
+    "area": {
+     "white": 12716,
+     "pupil": 1494,
+     "black": 2622,
+     "pupil_colour": 1494,
+     "highlight": 236,
+     "outline": 2622,
+     "core": 0,
+     "body": 14210
+    },
+    "centroid": {
+     "white": [
+      84.54,
+      192.0
+     ],
+     "body": [
+      89.54,
+      193.83
+     ],
+     "pupil": [
+      132.13,
+      209.39
+     ],
+     "black": [
+      82.87,
+      162.65
+     ],
+     "core": null
+    },
+    "bboxes": {
+     "white": [
+      0,
+      122,
+      167,
+      247
+     ],
+     "body": [
+      0,
+      122,
+      167,
+      247
+     ],
+     "pupil": [
+      114,
+      188,
+      155,
+      236
+     ],
+     "black": [
+      0,
+      115,
+      160,
+      247
+     ]
+    },
+    "pupil_rel_white": [
+     47.59,
+     17.39
+    ],
+    "pupil_rel_body": [
+     42.59,
+     15.56
+    ],
+    "anchor_ref": [
+     83.5,
+     184.5
+    ]
+   },
+   "R": {
+    "bbox": [
+     214,
+     115,
+     375,
+     247
+    ],
+    "size": [
+     161,
+     132
+    ],
+    "files": {
+     "white": "emotes/polly-layers/bored-R-white.png",
+     "pupil": "emotes/polly-layers/bored-R-pupil.png",
+     "black": "emotes/polly-layers/bored-R-black.png"
+    },
+    "area": {
+     "white": 12509,
+     "pupil": 1464,
+     "black": 2568,
+     "pupil_colour": 1464,
+     "highlight": 218,
+     "outline": 2568,
+     "core": 0,
+     "body": 13973
+    },
+    "centroid": {
+     "white": [
+      294.19,
+      192.11
+     ],
+     "body": [
+      289.15,
+      193.88
+     ],
+     "pupil": [
+      246.05,
+      208.99
+     ],
+     "black": [
+      293.75,
+      162.94
+     ],
+     "core": null
+    },
+    "bboxes": {
+     "white": [
+      214,
+      122,
+      375,
+      247
+     ],
+     "body": [
+      214,
+      122,
+      375,
+      247
+     ],
+     "pupil": [
+      225,
+      187,
+      265,
+      235
+     ],
+     "black": [
+      220,
+      115,
+      375,
+      247
+     ]
+    },
+    "pupil_rel_white": [
+     -48.14,
+     16.88
+    ],
+    "pupil_rel_body": [
+     -43.1,
+     15.11
+    ],
+    "anchor_ref": [
+     294.5,
+     184.5
+    ]
+   }
+  },
+  "angry": {
+   "L": {
+    "bbox": [
+     0,
+     152,
+     96,
+     275
+    ],
+    "size": [
+     96,
+     123
+    ],
+    "files": {
+     "white": "emotes/polly-layers/angry-L-white.png",
+     "pupil": "emotes/polly-layers/angry-L-pupil.png",
+     "black": "emotes/polly-layers/angry-L-black.png"
+    },
+    "area": {
+     "white": 5909,
+     "pupil": 1174,
+     "black": 1859,
+     "pupil_colour": 1174,
+     "highlight": 95,
+     "outline": 1859,
+     "core": 0,
+     "body": 7083
+    },
+    "centroid": {
+     "white": [
+      34.72,
+      216.28
+     ],
+     "body": [
+      39.73,
+      212.56
+     ],
+     "pupil": [
+      64.95,
+      193.82
+     ],
+     "black": [
+      44.36,
+      212.11
+     ],
+     "core": null
+    },
+    "bboxes": {
+     "white": [
+      0,
+      165,
+      96,
+      265
+     ],
+     "body": [
+      0,
+      165,
+      96,
+      265
+     ],
+     "pupil": [
+      46,
+      176,
+      86,
+      214
+     ],
+     "black": [
+      0,
+      152,
+      92,
+      275
+     ]
+    },
+    "pupil_rel_white": [
+     30.23,
+     -22.46
+    ],
+    "pupil_rel_body": [
+     25.22,
+     -18.74
+    ],
+    "anchor_ref": [
+     48.0,
+     211.5
+    ]
+   },
+   "R": {
+    "bbox": [
+     150,
+     146,
+     306,
+     275
+    ],
+    "size": [
+     156,
+     129
+    ],
+    "files": {
+     "white": "emotes/polly-layers/angry-R-white.png",
+     "pupil": "emotes/polly-layers/angry-R-pupil.png",
+     "black": "emotes/polly-layers/angry-R-black.png"
+    },
+    "area": {
+     "white": 11075,
+     "pupil": 1172,
+     "black": 3032,
+     "pupil_colour": 1172,
+     "highlight": 93,
+     "outline": 3032,
+     "core": 0,
+     "body": 12247
+    },
+    "centroid": {
+     "white": [
+      239.62,
+      210.44
+     ],
+     "body": [
+      233.93,
+      208.84
+     ],
+     "pupil": [
+      180.11,
+      193.77
+     ],
+     "black": [
+      227.67,
+      210.55
+     ],
+     "core": null
+    },
+    "bboxes": {
+     "white": [
+      150,
+      151,
+      306,
+      265
+     ],
+     "body": [
+      150,
+      151,
+      306,
+      265
+     ],
+     "pupil": [
+      160,
+      176,
+      200,
+      214
+     ],
+     "black": [
+      154,
+      146,
+      301,
+      275
+     ]
+    },
+    "pupil_rel_white": [
+     -59.51,
+     -16.67
+    ],
+    "pupil_rel_body": [
+     -53.82,
+     -15.07
+    ],
+    "anchor_ref": [
+     228.0,
+     211.5
+    ]
+   }
+  },
+  "sleepy": {
+   "L": {
+    "bbox": [
+     0,
+     128,
+     127,
+     279
+    ],
+    "size": [
+     127,
+     151
+    ],
+    "files": {
+     "white": "emotes/polly-layers/sleepy-L-white.png",
+     "pupil": "emotes/polly-layers/sleepy-L-pupil.png",
+     "black": "emotes/polly-layers/sleepy-L-black.png"
+    },
+    "area": {
+     "white": 14143,
+     "pupil": 115,
+     "black": 2697,
+     "pupil_colour": 0,
+     "highlight": 0,
+     "outline": 2582,
+     "core": 115,
+     "body": 14258
+    },
+    "centroid": {
+     "white": [
+      55.35,
+      210.95
+     ],
+     "body": [
+      55.7,
+      211.06
+     ],
+     "pupil": [
+      99.23,
+      224.01
+     ],
+     "black": [
+      70.69,
+      167.22
+     ],
+     "core": [
+      99.23,
+      224.01
+     ]
+    },
+    "bboxes": {
+     "white": [
+      0,
+      143,
+      127,
+      279
+     ],
+     "body": [
+      0,
+      143,
+      127,
+      279
+     ],
+     "pupil": [
+      89,
+      219,
+      109,
+      231
+     ],
+     "black": [
+      0,
+      128,
+      125,
+      279
+     ]
+    },
+    "pupil_rel_white": [
+     43.88,
+     13.06
+    ],
+    "pupil_rel_body": [
+     43.53,
+     12.95
+    ],
+    "anchor_ref": [
+     63.5,
+     211.0
+    ]
+   },
+   "R": {
+    "bbox": [
+     153,
+     128,
+     318,
+     279
+    ],
+    "size": [
+     165,
+     151
+    ],
+    "files": {
+     "white": "emotes/polly-layers/sleepy-R-white.png",
+     "pupil": "emotes/polly-layers/sleepy-R-pupil.png",
+     "black": "emotes/polly-layers/sleepy-R-black.png"
+    },
+    "area": {
+     "white": 16182,
+     "pupil": 105,
+     "black": 4110,
+     "pupil_colour": 0,
+     "highlight": 0,
+     "outline": 4005,
+     "core": 105,
+     "body": 16287
+    },
+    "centroid": {
+     "white": [
+      231.85,
+      212.45
+     ],
+     "body": [
+      231.51,
+      212.53
+     ],
+     "pupil": [
+      179.42,
+      224.12
+     ],
+     "black": [
+      239.5,
+      179.46
+     ],
+     "core": [
+      179.42,
+      224.12
+     ]
+    },
+    "bboxes": {
+     "white": [
+      153,
+      143,
+      305,
+      279
+     ],
+     "body": [
+      153,
+      143,
+      305,
+      279
+     ],
+     "pupil": [
+      172,
+      219,
+      191,
+      231
+     ],
+     "black": [
+      155,
+      128,
+      318,
+      279
+     ]
+    },
+    "pupil_rel_white": [
+     -52.43,
+     11.67
+    ],
+    "pupil_rel_body": [
+     -52.09,
+     11.59
+    ],
+    "anchor_ref": [
+     229.0,
+     211.0
+    ]
+   }
+  },
+  "smug": {
+   "L": {
+    "bbox": [
+     0,
+     177,
+     146,
+     279
+    ],
+    "size": [
+     146,
+     102
+    ],
+    "files": {
+     "white": "emotes/polly-layers/smug-L-white.png",
+     "pupil": "emotes/polly-layers/smug-L-pupil.png",
+     "black": "emotes/polly-layers/smug-L-black.png"
+    },
+    "area": {
+     "white": 10093,
+     "pupil": 1863,
+     "black": 2175,
+     "pupil_colour": 1863,
+     "highlight": 150,
+     "outline": 2175,
+     "core": 0,
+     "body": 11956
+    },
+    "centroid": {
+     "white": [
+      60.35,
+      228.8
+     ],
+     "body": [
+      69.21,
+      230.48
+     ],
+     "pupil": [
+      117.16,
+      239.6
+     ],
+     "black": [
+      75.69,
+      207.56
+     ],
+     "core": null
+    },
+    "bboxes": {
+     "white": [
+      0,
+      184,
+      146,
+      279
+     ],
+     "body": [
+      0,
+      184,
+      146,
+      279
+     ],
+     "pupil": [
+      96,
+      211,
+      138,
+      270
+     ],
+     "black": [
+      0,
+      177,
+      143,
+      279
+     ]
+    },
+    "pupil_rel_white": [
+     56.81,
+     10.8
+    ],
+    "pupil_rel_body": [
+     47.95,
+     9.12
+    ],
+    "anchor_ref": [
+     73.0,
+     231.5
+    ]
+   },
+   "R": {
+    "bbox": [
+     186,
+     177,
+     371,
+     279
+    ],
+    "size": [
+     185,
+     102
+    ],
+    "files": {
+     "white": "emotes/polly-layers/smug-R-white.png",
+     "pupil": "emotes/polly-layers/smug-R-pupil.png",
+     "black": "emotes/polly-layers/smug-R-black.png"
+    },
+    "area": {
+     "white": 12931,
+     "pupil": 1801,
+     "black": 2529,
+     "pupil_colour": 1801,
+     "highlight": 144,
+     "outline": 2529,
+     "core": 0,
+     "body": 14732
+    },
+    "centroid": {
+     "white": [
+      287.35,
+      229.65
+     ],
+     "body": [
+      278.39,
+      230.83
+     ],
+     "pupil": [
+      214.06,
+      239.27
+     ],
+     "black": [
+      269.72,
+      204.58
+     ],
+     "core": null
+    },
+    "bboxes": {
+     "white": [
+      186,
+      184,
+      371,
+      279
+     ],
+     "body": [
+      186,
+      184,
+      371,
+      279
+     ],
+     "pupil": [
+      193,
+      211,
+      236,
+      269
+     ],
+     "black": [
+      189,
+      177,
+      371,
+      279
+     ]
+    },
+    "pupil_rel_white": [
+     -73.29,
+     9.62
+    ],
+    "pupil_rel_body": [
+     -64.33,
+     8.44
+    ],
+    "anchor_ref": [
+     278.5,
+     231.5
+    ]
+   }
+  },
+  "furious": {
+   "L": {
+    "bbox": [
+     0,
+     145,
+     114,
+     269
+    ],
+    "size": [
+     114,
+     124
+    ],
+    "files": {
+     "white": "emotes/polly-layers/furious-L-white.png",
+     "pupil": "emotes/polly-layers/furious-L-pupil.png",
+     "black": "emotes/polly-layers/furious-L-black.png"
+    },
+    "area": {
+     "white": 8691,
+     "pupil": 150,
+     "black": 2447,
+     "pupil_colour": 0,
+     "highlight": 0,
+     "outline": 2297,
+     "core": 150,
+     "body": 8841
+    },
+    "centroid": {
+     "white": [
+      47.04,
+      207.95
+     ],
+     "body": [
+      47.6,
+      207.59
+     ],
+     "pupil": [
+      79.71,
+      186.94
+     ],
+     "black": [
+      55.7,
+      204.62
+     ],
+     "core": [
+      79.71,
+      186.94
+     ]
+    },
+    "bboxes": {
+     "white": [
+      0,
+      157,
+      114,
+      260
+     ],
+     "body": [
+      0,
+      157,
+      114,
+      260
+     ],
+     "pupil": [
+      70,
+      181,
+      90,
+      196
+     ],
+     "black": [
+      0,
+      145,
+      110,
+      269
+     ]
+    },
+    "pupil_rel_white": [
+     32.67,
+     -21.01
+    ],
+    "pupil_rel_body": [
+     32.11,
+     -20.65
+    ],
+    "anchor_ref": [
+     57.0,
+     206.0
+    ]
+   },
+   "R": {
+    "bbox": [
+     166,
+     141,
+     322,
+     269
+    ],
+    "size": [
+     156,
+     128
+    ],
+    "files": {
+     "white": "emotes/polly-layers/furious-R-white.png",
+     "pupil": "emotes/polly-layers/furious-R-pupil.png",
+     "black": "emotes/polly-layers/furious-R-black.png"
+    },
+    "area": {
+     "white": 11718,
+     "pupil": 153,
+     "black": 3158,
+     "pupil_colour": 0,
+     "highlight": 0,
+     "outline": 3005,
+     "core": 153,
+     "body": 11871
+    },
+    "centroid": {
+     "white": [
+      252.64,
+      204.19
+     ],
+     "body": [
+      252.0,
+      203.97
+     ],
+     "pupil": [
+      203.09,
+      187.03
+     ],
+     "black": [
+      242.52,
+      204.03
+     ],
+     "core": [
+      203.09,
+      187.03
+     ]
+    },
+    "bboxes": {
+     "white": [
+      170,
+      147,
+      322,
+      260
+     ],
+     "body": [
+      170,
+      147,
+      322,
+      260
+     ],
+     "pupil": [
+      194,
+      181,
+      214,
+      196
+     ],
+     "black": [
+      166,
+      141,
+      318,
+      269
+     ]
+    },
+    "pupil_rel_white": [
+     -49.55,
+     -17.16
+    ],
+    "pupil_rel_body": [
+     -48.91,
+     -16.94
+    ],
+    "anchor_ref": [
+     246.0,
+     206.0
+    ]
+   }
+  },
+  "starry": {
+   "L": {
+    "bbox": [
+     0,
+     136,
+     142,
+     279
+    ],
+    "size": [
+     142,
+     143
+    ],
+    "files": {
+     "white": "emotes/polly-layers/starry-L-white.png",
+     "pupil": "emotes/polly-layers/starry-L-pupil.png",
+     "black": "emotes/polly-layers/starry-L-black.png"
+    },
+    "area": {
+     "white": 12360,
+     "pupil": 1863,
+     "black": 3009,
+     "pupil_colour": 1863,
+     "highlight": 0,
+     "outline": 3009,
+     "core": 0,
+     "body": 14223
+    },
+    "centroid": {
+     "white": [
+      61.34,
+      215.89
+     ],
+     "body": [
+      67.84,
+      215.04
+     ],
+     "pupil": [
+      111.02,
+      209.44
+     ],
+     "black": [
+      68.37,
+      179.11
+     ],
+     "core": null
+    },
+    "bboxes": {
+     "white": [
+      1,
+      150,
+      142,
+      279
+     ],
+     "body": [
+      1,
+      150,
+      142,
+      279
+     ],
+     "pupil": [
+      83,
+      178,
+      136,
+      239
+     ],
+     "black": [
+      0,
+      136,
+      139,
+      279
+     ]
+    },
+    "pupil_rel_white": [
+     49.68,
+     -6.45
+    ],
+    "pupil_rel_body": [
+     43.18,
+     -5.6
+    ],
+    "anchor_ref": [
+     71.5,
+     214.5
+    ]
+   },
+   "R": {
+    "bbox": [
+     166,
+     136,
+     318,
+     279
+    ],
+    "size": [
+     152,
+     143
+    ],
+    "files": {
+     "white": "emotes/polly-layers/starry-R-white.png",
+     "pupil": "emotes/polly-layers/starry-R-pupil.png",
+     "black": "emotes/polly-layers/starry-R-black.png"
+    },
+    "area": {
+     "white": 12483,
+     "pupil": 1782,
+     "black": 3503,
+     "pupil_colour": 1782,
+     "highlight": 0,
+     "outline": 3503,
+     "core": 0,
+     "body": 14265
+    },
+    "centroid": {
+     "white": [
+      244.85,
+      215.83
+     ],
+     "body": [
+      238.69,
+      215.09
+     ],
+     "pupil": [
+      195.55,
+      209.91
+     ],
+     "black": [
+      247.58,
+      184.49
+     ],
+     "core": null
+    },
+    "bboxes": {
+     "white": [
+      166,
+      150,
+      307,
+      279
+     ],
+     "body": [
+      166,
+      150,
+      307,
+      279
+     ],
+     "pupil": [
+      172,
+      179,
+      221,
+      239
+     ],
+     "black": [
+      168,
+      136,
+      318,
+      279
+     ]
+    },
+    "pupil_rel_white": [
+     -49.3,
+     -5.92
+    ],
+    "pupil_rel_body": [
+     -43.14,
+     -5.18
+    ],
+    "anchor_ref": [
+     236.5,
+     214.5
+    ]
+   }
+  },
+  "pleading": {
+   "L": {
+    "bbox": [
+     0,
+     128,
+     138,
+     279
+    ],
+    "size": [
+     138,
+     151
+    ],
+    "files": {
+     "white": "emotes/polly-layers/pleading-L-white.png",
+     "pupil": "emotes/polly-layers/pleading-L-pupil.png",
+     "black": "emotes/polly-layers/pleading-L-black.png"
+    },
+    "area": {
+     "white": 8984,
+     "pupil": 3994,
+     "black": 2613,
+     "pupil_colour": 3994,
+     "highlight": 141,
+     "outline": 2613,
+     "core": 0,
+     "body": 12978
+    },
+    "centroid": {
+     "white": [
+      48.65,
+      213.22
+     ],
+     "body": [
+      64.56,
+      207.43
+     ],
+     "pupil": [
+      100.34,
+      194.4
+     ],
+     "black": [
+      64.66,
+      192.11
+     ],
+     "core": null
+    },
+    "bboxes": {
+     "white": [
+      0,
+      133,
+      134,
+      279
+     ],
+     "body": [
+      0,
+      133,
+      138,
+      279
+     ],
+     "pupil": [
+      66,
+      152,
+      138,
+      234
+     ],
+     "black": [
+      0,
+      128,
+      127,
+      277
+     ]
+    },
+    "pupil_rel_white": [
+     51.69,
+     -18.82
+    ],
+    "pupil_rel_body": [
+     35.78,
+     -13.03
+    ],
+    "anchor_ref": [
+     69.0,
+     205.75
+    ]
+   },
+   "R": {
+    "bbox": [
+     177,
+     128,
+     345,
+     279
+    ],
+    "size": [
+     168,
+     151
+    ],
+    "files": {
+     "white": "emotes/polly-layers/pleading-R-white.png",
+     "pupil": "emotes/polly-layers/pleading-R-pupil.png",
+     "black": "emotes/polly-layers/pleading-R-black.png"
+    },
+    "area": {
+     "white": 10964,
+     "pupil": 3992,
+     "black": 3040,
+     "pupil_colour": 3992,
+     "highlight": 142,
+     "outline": 3040,
+     "core": 0,
+     "body": 14956
+    },
+    "centroid": {
+     "white": [
+      271.99,
+      215.39
+     ],
+     "body": [
+      255.34,
+      209.79
+     ],
+     "pupil": [
+      209.62,
+      194.4
+     ],
+     "black": [
+      257.05,
+      192.2
+     ],
+     "core": null
+    },
+    "bboxes": {
+     "white": [
+      177,
+      132,
+      343,
+      279
+     ],
+     "body": [
+      177,
+      132,
+      343,
+      279
+     ],
+     "pupil": [
+      177,
+      151,
+      247,
+      235
+     ],
+     "black": [
+      185,
+      128,
+      345,
+      277
+     ]
+    },
+    "pupil_rel_white": [
+     -62.37,
+     -20.99
+    ],
+    "pupil_rel_body": [
+     -45.72,
+     -15.39
+    ],
+    "anchor_ref": [
+     260.0,
+     205.75
+    ]
+   }
+  },
+  "love": {
+   "L": {
+    "bbox": [
+     0,
+     113,
+     98,
+     221
+    ],
+    "size": [
+     98,
+     108
+    ],
+    "files": {
+     "white": "emotes/polly-layers/love-L-white.png",
+     "pupil": "emotes/polly-layers/love-L-pupil.png",
+     "black": "emotes/polly-layers/love-L-black.png"
+    },
+    "area": {
+     "white": 5382,
+     "pupil": 2349,
+     "black": 1550,
+     "pupil_colour": 2349,
+     "highlight": 367,
+     "outline": 1550,
+     "core": 0,
+     "body": 7731
+    },
+    "centroid": {
+     "white": [
+      35.34,
+      167.95
+     ],
+     "body": [
+      45.38,
+      165.9
+     ],
+     "pupil": [
+      68.39,
+      161.2
+     ],
+     "black": [
+      44.8,
+      157.92
+     ],
+     "core": null
+    },
+    "bboxes": {
+     "white": [
+      0,
+      123,
+      98,
+      216
+     ],
+     "body": [
+      0,
+      123,
+      98,
+      216
+     ],
+     "pupil": [
+      39,
+      138,
+      98,
+      190
+     ],
+     "black": [
+      0,
+      113,
+      93,
+      221
+     ]
+    },
+    "pupil_rel_white": [
+     33.05,
+     -6.75
+    ],
+    "pupil_rel_body": [
+     23.01,
+     -4.7
+    ],
+    "anchor_ref": [
+     49.0,
+     171.75
+    ]
+   },
+   "R": {
+    "bbox": [
+     131,
+     114,
+     296,
+     232
+    ],
+    "size": [
+     165,
+     118
+    ],
+    "files": {
+     "white": "emotes/polly-layers/love-R-white.png",
+     "pupil": "emotes/polly-layers/love-R-pupil.png",
+     "black": "emotes/polly-layers/love-R-black.png"
+    },
+    "area": {
+     "white": 9970,
+     "pupil": 2293,
+     "black": 2767,
+     "pupil_colour": 2293,
+     "highlight": 331,
+     "outline": 2767,
+     "core": 0,
+     "body": 12263
+    },
+    "centroid": {
+     "white": [
+      222.63,
+      174.58
+     ],
+     "body": [
+      210.9,
+      172.13
+     ],
+     "pupil": [
+      159.91,
+      161.5
+     ],
+     "black": [
+      217.68,
+      160.43
+     ],
+     "core": null
+    },
+    "bboxes": {
+     "white": [
+      131,
+      123,
+      296,
+      225
+     ],
+     "body": [
+      131,
+      123,
+      296,
+      225
+     ],
+     "pupil": [
+      132,
+      138,
+      190,
+      192
+     ],
+     "black": [
+      137,
+      114,
+      296,
+      232
+     ]
+    },
+    "pupil_rel_white": [
+     -62.72,
+     -13.08
+    ],
+    "pupil_rel_body": [
+     -50.99,
+     -10.63
+    ],
+    "anchor_ref": [
+     213.5,
+     171.75
+    ]
+   }
+  },
+  "dizzy": {
+   "L": {
+    "bbox": [
+     3,
+     105,
+     146,
+     252
+    ],
+    "size": [
+     143,
+     147
+    ],
+    "files": {
+     "white": "emotes/polly-layers/dizzy-L-white.png",
+     "pupil": "emotes/polly-layers/dizzy-L-pupil.png",
+     "black": "emotes/polly-layers/dizzy-L-black.png"
+    },
+    "area": {
+     "white": 11317,
+     "pupil": 1323,
+     "black": 5116,
+     "pupil_colour": 0,
+     "highlight": 0,
+     "outline": 3793,
+     "core": 1323,
+     "body": 12640
+    },
+    "centroid": {
+     "white": [
+      73.09,
+      180.33
+     ],
+     "body": [
+      76.98,
+      179.95
+     ],
+     "pupil": [
+      110.27,
+      176.73
+     ],
+     "black": [
+      76.34,
+      169.79
+     ],
+     "core": [
+      110.27,
+      176.73
+     ]
+    },
+    "bboxes": {
+     "white": [
+      14,
+      118,
+      146,
+      244
+     ],
+     "body": [
+      14,
+      118,
+      146,
+      244
+     ],
+     "pupil": [
+      82,
+      145,
+      143,
+      208
+     ],
+     "black": [
+      3,
+      105,
+      144,
+      252
+     ]
+    },
+    "pupil_rel_white": [
+     37.18,
+     -3.6
+    ],
+    "pupil_rel_body": [
+     33.29,
+     -3.22
+    ],
+    "anchor_ref": [
+     80.0,
+     181.0
+    ]
+   },
+   "R": {
+    "bbox": [
+     170,
+     105,
+     312,
+     252
+    ],
+    "size": [
+     142,
+     147
+    ],
+    "files": {
+     "white": "emotes/polly-layers/dizzy-R-white.png",
+     "pupil": "emotes/polly-layers/dizzy-R-pupil.png",
+     "black": "emotes/polly-layers/dizzy-R-black.png"
+    },
+    "area": {
+     "white": 11285,
+     "pupil": 1353,
+     "black": 5127,
+     "pupil_colour": 0,
+     "highlight": 0,
+     "outline": 3774,
+     "core": 1353,
+     "body": 12638
+    },
+    "centroid": {
+     "white": [
+      241.85,
+      180.36
+     ],
+     "body": [
+      237.85,
+      179.96
+     ],
+     "pupil": [
+      204.42,
+      176.62
+     ],
+     "black": [
+      237.29,
+      169.79
+     ],
+     "core": [
+      204.42,
+      176.62
+     ]
+    },
+    "bboxes": {
+     "white": [
+      170,
+      118,
+      302,
+      244
+     ],
+     "body": [
+      170,
+      118,
+      302,
+      244
+     ],
+     "pupil": [
+      172,
+      146,
+      234,
+      208
+     ],
+     "black": [
+      171,
+      105,
+      312,
+      252
+     ]
+    },
+    "pupil_rel_white": [
+     -37.43,
+     -3.74
+    ],
+    "pupil_rel_body": [
+     -33.43,
+     -3.34
+    ],
+    "anchor_ref": [
+     236.0,
+     181.0
+    ]
+   }
+  },
+  "blush": {
+   "L": {
+    "bbox": [
+     21,
+     101,
+     167,
+     250
+    ],
+    "size": [
+     146,
+     149
+    ],
+    "files": {
+     "white": "emotes/polly-layers/blush-L-white.png",
+     "pupil": "emotes/polly-layers/blush-L-pupil.png",
+     "black": "emotes/polly-layers/blush-L-black.png"
+    },
+    "area": {
+     "white": 13183,
+     "pupil": 80,
+     "black": 3937,
+     "pupil_colour": 0,
+     "highlight": 0,
+     "outline": 3857,
+     "core": 80,
+     "body": 13263
+    },
+    "centroid": {
+     "white": [
+      96.82,
+      177.16
+     ],
+     "body": [
+      97.11,
+      177.26
+     ],
+     "pupil": [
+      143.65,
+      193.88
+     ],
+     "black": [
+      85.94,
+      161.51
+     ],
+     "core": [
+      143.65,
+      193.88
+     ]
+    },
+    "bboxes": {
+     "white": [
+      33,
+      114,
+      167,
+      243
+     ],
+     "body": [
+      33,
+      114,
+      167,
+      243
+     ],
+     "pupil": [
+      140,
+      189,
+      149,
+      200
+     ],
+     "black": [
+      21,
+      101,
+      166,
+      250
+     ]
+    },
+    "pupil_rel_white": [
+     46.83,
+     16.72
+    ],
+    "pupil_rel_body": [
+     46.54,
+     16.62
+    ],
+    "anchor_ref": [
+     100.0,
+     178.5
+    ]
+   },
+   "R": {
+    "bbox": [
+     191,
+     101,
+     338,
+     251
+    ],
+    "size": [
+     147,
+     150
+    ],
+    "files": {
+     "white": "emotes/polly-layers/blush-R-white.png",
+     "pupil": "emotes/polly-layers/blush-R-pupil.png",
+     "black": "emotes/polly-layers/blush-R-black.png"
+    },
+    "area": {
+     "white": 13215,
+     "pupil": 81,
+     "black": 3921,
+     "pupil_colour": 0,
+     "highlight": 0,
+     "outline": 3840,
+     "core": 81,
+     "body": 13296
+    },
+    "centroid": {
+     "white": [
+      261.42,
+      177.09
+     ],
+     "body": [
+      261.14,
+      177.19
+     ],
+     "pupil": [
+      215.06,
+      193.83
+     ],
+     "black": [
+      271.27,
+      161.97
+     ],
+     "core": [
+      215.06,
+      193.83
+     ]
+    },
+    "bboxes": {
+     "white": [
+      191,
+      114,
+      327,
+      243
+     ],
+     "body": [
+      191,
+      114,
+      327,
+      243
+     ],
+     "pupil": [
+      211,
+      189,
+      220,
+      200
+     ],
+     "black": [
+      193,
+      101,
+      338,
+      251
+     ]
+    },
+    "pupil_rel_white": [
+     -46.36,
+     16.74
+    ],
+    "pupil_rel_body": [
+     -46.08,
+     16.64
+    ],
+    "anchor_ref": [
+     259.0,
+     178.5
+    ]
+   }
+  }
+ }
+}
