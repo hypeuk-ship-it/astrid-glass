@@ -130,3 +130,12 @@ whites solid, pupils inside whites, shut frames = lash art only, no grey smudge,
 14:33 classic identity vs live 5dc042d (tools/polly_classic_identity.py, 12 queries incl. an animated stadium with hover
 darts): ALL IDENTICAL, 0 px, 0 errors. coats.js / face.js / springs.js / emotes.js unchanged (byte-identical to 5dc042d).
 14:34 pushing to hypeuk-ship-it/astrid-glass (fresh clone /tmp/ag-v6), cache-bust ?v=10071435 on every script / atlas URL.
+14:36 PUSHED 1921e8b to hypeuk-ship-it/astrid-glass main. GitHub Pages picked it up within ~30 s: live index.html,
+glass.frag, polly-deco-atlas.png/.json and polly-layer-atlas.png/.json are byte-identical to the commit, with 8 x ?v=10071435.
+A headless load of https://hypeuk-ship-it.github.io/astrid-glass/?v=10071435&sheet=polly&toon=1&eyes=polly-blush showed the
+layer + deco atlases ready, the rig on (blush), and 0 shader or page errors.
+Share: /workspace/share/polly-v6-preview(-sm).png, polly-v6-blinkstrip(-sm).png, polly-v6-anim.mp4 (1.5 MB).
+Open items: love keeps one brown blush crescent under the right eye (her FX; the left one is cut off in her sheet cell);
+her rest pose has pupils overlapping the nasal or lower corner (confident, angry, smug), and glances keep that overlap;
+sleepy reopens with no overshoot (on purpose); horizontal glances are smaller for pupils resting on the nasal edge
+(nasal give-back 0); her nose shade is off on the live path (LAY_NOSE = 0).
