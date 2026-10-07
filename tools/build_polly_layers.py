@@ -1,7 +1,11 @@
 """Build Polly 3-layer rig assets from the reference cells.
    python3 tools/build_polly_layers.py
 Writes emotes/polly-layers/* (per-eye RGBA layer sprites + masks + meta.json) and the runtime atlas
-polly-layer-atlas.png/.json (10 cols x 12 rows; per eye L then R: white-body, pupil, core, highlight, outline).
+polly-layer-atlas.png/.json (14 cols x 12 rows; per eye L then R: white-body, pupil, core, highlight, outline, fringe,
+nat-white). v5.1: the white RGB is a clean two-tone model (robust per-tone fit; no watermark / speckle), continued under
+the pupil along the fitted tone split, and a 7th 'nat' cell holds the NATURAL white contour (the eye edge bridged across
+the stretch the rest pupil covered, pupil bulges trimmed). The shader shows the exact rest body at rest and the nat
+contour once the pupil has moved (> ~1-3.5 texels), so a dart never leaves a pupil-shaped bite / hole in the white.
 Every cell is RGBA: RGB = the reference colours (bled 3 texels outward), A = a signed distance field of that layer's
 exact mask (a = 0.5 + d / (2 * SDF_R), d in texels, + inside; d = +-0.5 at the first texel centre either side of the
 edge, so thresholding at 0.5 at texel centres reproduces the mask bit-exactly)."""
@@ -16,7 +20,7 @@ REF = '/workspace/eye-emotes/refs/cells/polly-{i:02d}-{e}.png'
 OUTD = os.path.join(ROOT, 'emotes', 'polly-layers'); os.makedirs(os.path.join(OUTD, 'masks'), exist_ok=True)
 PAD = 5
 SDF_R = 4.0
-NCELL = 6
+NCELL = 10
 
 def sdf8(m):
   """8-bit signed distance field of a binary mask (texels, + inside), see module doc."""
@@ -94,6 +98,142 @@ def two_tone_fill(med0, clean, white, zone):
   return wA * FA + (1 - wA) * FB, info
 
 
+def sclera_field(sf, med0, clean, white, unknown, zone):
+  """v5.1 clean sclera colour field S (whole cell). Two tones (lavender wash / white) when the clean sclera has them:
+  each tone = robust smooth model (robust_tone_model); the tone of every visible white pixel comes from its own colour
+  (projection on the A..B line, median-cleaned so watermark strokes / specks never flip it); under the pupil and the
+  bridged edge (unknown) the split continues along a RANSAC quadratic fitted to the visible split near the pupil
+  (nearest visible tone where no good fit exists); a ~1 px AA ramp joins the tones. Returns (S HxWx3 float, info)."""
+  H, W = clean.shape
+  info = dict(mode='single')
+  from skimage.color import rgb2lab
+  if clean.sum() < 60:
+    M = robust_tone_model(sf, clean if clean.any() else white, (H, W)); return M, info
+  lab = rgb2lab(med0.clip(0, 255) / 255.0)
+  X = lab[clean].astype(np.float32)
+  crit = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 50, .1)
+  _, lbl, ctr = cv2.kmeans(X, 2, None, crit, 4, cv2.KMEANS_PP_CENTERS)
+  lbl = lbl[:, 0]; frac = min((lbl == 0).mean(), (lbl == 1).mean()); dE = float(np.linalg.norm(ctr[0] - ctr[1]))
+  info.update(dE=round(dE, 2), frac=round(float(frac), 3))
+  if dE <= 6 or frac < .04:
+    return robust_tone_model(sf, clean, (H, W)), info
+  K = np.full(clean.shape, -1, np.int8); K[clean] = lbl
+  if ctr[0][0] > ctr[1][0]: K[clean] = 1 - lbl                     # tone 0 = A = the darker (lavender) wash
+  A, B = K == 0, K == 1
+  MA = robust_tone_model(sf, A, (H, W)); MB = robust_tone_model(sf, B, (H, W))
+  dAB = MB - MA; den = np.maximum((dAB * dAB).sum(-1), 1.0)
+  t = ((sf - MA) * dAB).sum(-1) / den                              # 0 = tone A, 1 = tone B
+  unknown = unknown | zone                                          # the pupil's AA tints the sclera near it: not a tone cue
+  known = white & ~unknown
+  hardA = known & (t < .5)
+  # label map everywhere: visible white from its colour (median 5x5 cleaned), else nearest visible / fitted split
+  _, (iy, ix) = ndi.distance_transform_edt(~known, return_indices=True)
+  LA = hardA[iy, ix].astype(np.uint8)
+  LA = ndi.median_filter(LA, size=5).astype(bool)
+  # fitted split under the unknown region
+  dB = ndi.distance_transform_edt(~B); dA = ndi.distance_transform_edt(~A)
+  cont = (A & (dB <= 2.5)) | (B & (dA <= 2.5))
+  ref = unknown & ndi.binary_dilation(white, np.ones((3, 3), bool)) if unknown.any() else zone
+  fitted = False
+  if ref.any() and cont.sum() >= 12:
+    zy, zx = np.nonzero(ref); zc = np.array([zx.mean(), zy.mean()]); zr = max(np.ptp(zx), np.ptp(zy)) / 2 + 30
+    ys, xs = np.nonzero(cont); near = np.hypot(xs - zc[0], ys - zc[1]) <= zr
+    u, v = xs[near].astype(float), ys[near].astype(float)
+    if len(u) >= 12 and np.ptp(u) >= 8:
+      rng = np.random.default_rng(7); best = None
+      for _ in range(400):
+        idx = rng.choice(len(u), 3, replace=False)
+        if np.ptp(u[idx]) < 8: continue
+        c = np.polyfit(u[idx], v[idx], 2); inl = np.abs(np.polyval(c, u) - v) <= 1.5
+        if best is None or inl.sum() > best.sum(): best = inl
+      keep = best if best is not None and best.sum() >= 12 else np.ones(len(u), bool)
+      for _ in range(3):
+        c = np.polyfit(u[keep], v[keep], 2); r = np.abs(np.polyval(c, u) - v); keep = r <= 1.8
+      res = float(np.median(np.abs(np.polyval(c, u[keep]) - v[keep])))
+      info.update(fit=[round(float(q), 5) for q in c], res=round(res, 2), n=int(keep.sum()))
+      if res <= 2.0:
+        gy, gx = np.mgrid[0:H, 0:W].astype(float)
+        sd = gy - np.polyval(c, gx)
+        sa = np.sign(np.median(sd[A])) if A.any() else 1.0
+        if np.median(sd[B]) * sa < 0:
+          LA = np.where(unknown, sa * sd > 0, LA); fitted = True
+  from skimage.morphology import remove_small_objects, remove_small_holes
+  LA = remove_small_holes(remove_small_objects(LA, 120), 120)       # tone islands < 120 px = specks / watermark, not art
+  # v5.2: Polly's lavender wash is ONE band across the top of the eye. Detached lavender islands are the nose / skin
+  # overlap AA at the open inner edge (bored, angry, sleepy, furious...), which the tone classifier reads as lavender: in
+  # the rig they sat as stationary patches next to the resting pupil ('hole' when it darts). Keep the main wash only
+  # (+ any island >= 40 % of it); every pixel stays sclera-coloured, so the WHITE class (the gate) is unchanged.
+  # (islands joined to the wash by a thin edge strip count as detached: components are taken after a radius-2 opening)
+  from skimage.morphology import disk as _disk
+  Rg = ndi.binary_dilation(white | unknown, _disk(2))                # the eye only (LA is a whole-cell map)
+  ll, ln = ndi.label(ndi.binary_opening(LA & Rg, _disk(2)))
+  if ln > 1:
+    sz = ndi.sum(np.ones_like(ll), ll, range(1, ln + 1)); keep = [i + 1 for i in range(ln) if sz[i] >= .4 * sz.max()]
+    km = ndi.binary_dilation(np.isin(ll, keep), _disk(3)); info['islands_dropped'] = int(ln - len(keep))
+    info['island_px'] = int((LA & Rg & white & ~km).sum()); LA = (LA & ~Rg) | (LA & Rg & km)
+  info['mode'] = 'two-tone' + (' fitted' if fitted else ' nearest')
+  wA = ndi.gaussian_filter(LA.astype(float), 0.65)[..., None]
+  return wA * MA + (1 - wA) * MB, info
+
+
+def poly_design(xs, ys):
+  x = xs / 100.0; y = ys / 100.0
+  return np.stack([np.ones_like(x), x, y], -1)                    # planar: the tones are flat washes (no drift)
+
+def robust_tone_model(sf, m, shape):
+  """Smooth colour model of one sclera tone: per-channel plane in (x, y), clamped to the tone's own colour range, fitted with iterative outlier
+  rejection (drops the faint sheet watermark, JPEG speckle and AA tints), evaluated on the whole cell. Falls back to the
+  trimmed median colour when there are too few pixels."""
+  H, W = shape; ys, xs = np.nonzero(m)
+  if len(xs) < 40:
+    c = np.median(sf[m], 0) if m.any() else np.array([240.0, 240.0, 245.0]); return np.broadcast_to(c, (H, W, 3)).astype(float)
+  X = poly_design(xs.astype(float), ys.astype(float)); Y = sf[m]; keep = np.ones(len(xs), bool)
+  for _ in range(6):
+    coef, *_ = np.linalg.lstsq(X[keep], Y[keep], rcond=None)
+    r = np.abs(X @ coef - Y).max(-1); mad = np.median(r[keep]) + 1e-3
+    nk = r <= max(3.0, 3.0 * mad)
+    if nk.sum() < 30 or (nk == keep).all(): break
+    keep = nk
+  gy, gx = np.mgrid[0:H, 0:W].astype(float)
+  lo, hi = np.percentile(Y[keep], 2, 0) - 1, np.percentile(Y[keep], 98, 0) + 1   # never extrapolate past the seen tone
+  return np.clip((poly_design(gx.ravel(), gy.ravel()) @ coef).reshape(H, W, 3), lo, hi)
+
+def npoly_of(nat_s, ox, oy, w, h, CW, CH):
+  """v5.2: natural-white contour polygon (cell texels, pixel centres) for the runtime pupil containment"""
+  nm = np.zeros((CH, CW), np.uint8); nm[oy:oy + h, ox:ox + w] = nat_s
+  cs, _ = cv2.findContours(nm, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+  pl = cv2.approxPolyDP(max(cs, key=cv2.contourArea), 0.6, True)[:, 0, :].astype(float) + 0.5
+  return [[round(float(a), 2), round(float(b), 2)] for a, b in pl]
+
+def natural_white(body, mov, F, outline):
+  """The eye's NATURAL white region: body minus the rest pupil/core, with the white edge bridged (local convex hull of
+  the nearby white) across the stretch where the rest pupil sits on the open eye edge (Polly's pupils rest on the open
+  inner edge, so the reference body follows the pupil's own contour there). Bulges of the pupil past the bridged edge
+  are trimmed. Never spills past the ink outline."""
+  from skimage.morphology import convex_hull_image, disk
+  H, W = body.shape
+  bord = np.zeros((H, W), bool); bord[0, :] = bord[-1, :] = bord[:, 0] = bord[:, -1] = True
+  if not mov.any(): return body.copy(), np.zeros((H, W), bool)
+  touch = mov & (ndi.binary_dilation(~F, np.ones((3, 3), bool)) | bord)
+  Wx = body & ~mov
+  if not touch.any(): return body.copy(), np.zeros((H, W), bool)
+  nat = Wx | mov
+  lt, nt = ndi.label(ndi.binary_dilation(touch, disk(3)))
+  for i in range(1, nt + 1):
+    win = ndi.binary_dilation(lt == i, disk(14))
+    pts = (Wx | outline) & win                    # the outline's inner side anchors the bridge too (pupil in a corner)
+    if (Wx & win).sum() < 20: continue
+    hull = convex_hull_image(pts)
+    nat = (nat & ~(win & mov)) | (win & mov & hull) | (win & hull & ~Wx)
+  beyond = ~F & ndi.binary_dilation(outline, disk(4))
+  nat &= ~beyond
+  nat = ndi.binary_fill_holes(nat)
+  lab, n = ndi.label(nat)
+  if n > 1:
+    sz = ndi.sum(np.ones_like(lab), lab, range(1, n + 1)); nat = lab == (1 + int(np.argmax(sz)))
+  return nat, touch
+
+
 def bleed(rgb, a):
   """RGB of transparent texels := nearest opaque texel (so LINEAR filtering at the edges keeps the colour)."""
   if not a.any(): return np.zeros_like(rgb)
@@ -106,6 +246,45 @@ def centroid(m):
 def bbox(m):
   ys, xs = np.nonzero(m)
   return [int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1] if len(xs) else None
+
+def lid_split(body, outline, ox, oy, w, h, CW, CH):
+  """v6 lid geometry (cell texels). Returns (lash mask in footprint coords, lidprof RGBA cell).
+  lidprof: R = top of the opening, G = bottom, B = top of the column's outline ink (clip top) (all / CH, constant down each
+  column, A = 255 so no premultiply loss). Columns without body copy the nearest body column's opening. The UPPER LASH (the
+  part that slides down with the lid) is the outline ink in a band of 1.6 x her lash thickness just above the opening line
+  (above the mid line only), so a horizontal-ish lid stroke and its corner tips ride down, while tall side strokes stay put
+  and are eaten from the top as the lid passes (the opening's side edges shorten instead of riding down as a spike)."""
+  Bm = np.zeros((CH, CW), bool); Bm[oy:oy + h, ox:ox + w] = body
+  Om = np.zeros((CH, CW), bool); Om[oy:oy + h, ox:ox + w] = outline
+  has = Bm.any(0); xs = np.nonzero(has)[0]
+  top = np.zeros(CW); bot = np.zeros(CW)
+  for x in xs:
+    ys = np.nonzero(Bm[:, x])[0]; top[x] = ys.min(); bot[x] = ys.max() + 1
+  for x in range(CW):
+    if not has[x]:
+      j = xs[np.argmin(np.abs(xs - x))]; top[x] = top[j]; bot[x] = bot[j]
+  mid = (top + bot) / 2
+  yy = np.arange(CH)[:, None] + 0.5
+  # her lash thickness: the ink run right above the opening on the central body columns (median)
+  thk = []
+  for x in xs:
+    y = int(top[x]) - 1; n = 0
+    while y >= 0 and Om[y, x]: n += 1; y -= 1
+    if n: thk.append(n)
+  T = float(np.median(thk)) if thk else 6.0
+  lashC = Om & (yy < mid[None, :]) & (yy >= (top - 1.6 * T)[None, :]) & (yy < (top + 0.5 * T)[None, :])
+  ct = np.where(Om.any(0), np.argmax(Om, 0), top).astype(float)
+  ct = np.minimum(ct, top)
+  top_s = ndi.gaussian_filter1d(top, 1.5, mode='nearest'); bot_s = ndi.gaussian_filter1d(bot, 1.5, mode='nearest')
+  c = np.zeros((CH, CW, 4), np.uint8)
+  for k, v in enumerate((top_s, bot_s, ct)): c[..., k] = np.clip(np.round(v / CH * 255), 0, 255).astype(np.uint8)[None, :]
+  c[..., 3] = 255
+  # lidprof2: R = top of the upper lash in the column (/ CH), G = her lash thickness T / 64 (the closed arc's thickness: a
+  # steep lash run is squashed toward T as the lid shuts, so the side of the eye never rides down as a tall spike)
+  lt = np.where(lashC.any(0), np.argmax(lashC, 0), top).astype(float)
+  c2 = np.zeros((CH, CW, 4), np.uint8); c2[..., 0] = np.clip(np.round(lt / CH * 255), 0, 255).astype(np.uint8)[None, :]
+  c2[..., 1] = int(round(min(T, 63) / 64 * 255)); c2[..., 3] = 255
+  return lashC[oy:oy + h, ox:ox + w], c, c2
 
 def main():
   eyes = {}
@@ -126,7 +305,7 @@ def main():
                    'black layer = OUTLINE + CORE (all near-black ink). Coordinates: px in the reference cell '
                    '(x right, y down); sprite px = ref px - bbox[0:2].', eyes={})
   rt = dict(cw=CW, ch=CH, cols=COLS, rows=ROWS, W=COLS * CW, H=ROWS * CH, ids=IDS, ncell=NCELL, sdfR=SDF_R,
-            cells=['white', 'pupil', 'core', 'highlight', 'outline', 'fringe'], emotes={})
+            cells=['white', 'pupil', 'core', 'highlight', 'outline', 'fringe', 'nat', 'lidprof', 'lash', 'lidprof2'], emotes={})
   ink_px = []
   for row, e in enumerate(IDS):
     rgb = eyes[e]['rgb']; res = eyes[e]['res']
@@ -172,19 +351,19 @@ def main():
       clean = ndi.binary_erosion(clean, np.ones((3, 3), bool))
       if clean.sum() < 30: clean = white & ~zone
       if not clean.any(): clean = white
-      Sf, sinfo = two_tone_fill(med0, clean, white, zone)
-      S = np.round(Sf).clip(0, 255)                                         # clean sclera colour field (8-bit), two-tone aware
+      Fc = r['F'][crop]
+      nat, touch = natural_white(body, mov, Fc, outline)                    # natural (bridged, trimmed) white contour
+      unknown = (body | nat) & ~white                                        # no visible sclera: under pupil/core, bridge
+      Sf, sinfo = sclera_field(sf, med0, clean, white, unknown, zone)
+      S = np.round(Sf).clip(0, 255)                                          # clean two-tone sclera field (8-bit)
+      sinfo['nat+'] = int((nat & ~body).sum()); sinfo['nat-'] = int((body & ~nat).sum())
       print(e, side, sinfo, flush=True)
-      # WHITE body colours: sclera median-cleaned (7x7: drops the faint sheet watermark / JPEG speckle); under the
-      # pupil, the core and their AA zone = the clean field, so a glance reveals plain sclera (no ghost). Every one
-      # of these stays WHITE by colour, so the layer classes at rest are the reference's.
-      base = np.where(white[..., None], sf, S)
-      med = np.stack([ndi.median_filter(base[..., k], size=7) for k in range(3)], -1)
-      lum = sf.mean(-1); sat = sf.max(-1) - sf.min(-1)
-      plain = white & (lum >= T['white_lum']) & (sat <= T['white_sat']) & (ndi.distance_transform_edt(white) > 2.5) & ~zone
-      plain &= (med.mean(-1) >= T['white_lum'] + 4) & ((med.max(-1) - med.min(-1)) <= T['white_sat'] - 4)
-      wcol = np.where(plain[..., None], med, sf)                          # median only on plain sclera; AA edges keep theirs
-      wcol = np.where((zone | (body & ~white))[..., None], S, wcol)       # under / around the moving layers: clean field
+      # WHITE colours (v5.1): every visible sclera pixel = the clean model S (no watermark, specks or blotches; it stays
+      # WHITE by colour, so the rest classes are the reference's), except the 2 px anti-aliased band against the ink
+      # outline / the skin, which keeps the reference pixel (it carries the edge AA). Under / around the moving layers
+      # and on the bridged edge: S as well (the pupil's own AA moves with it in the fringe layer).
+      band = white & (ndi.distance_transform_edt(Fc & ~outline) <= 2.0) & ~zone
+      wcol = np.where(band[..., None], sf, S)
       # FRINGE layer: the pupil's anti-aliasing that the reference baked into the sclera (zone pixels), unmixed against
       # the clean field: c = a*F + (1-a)*S with a from the projection on the nearest pupil/core colour (raised just
       # enough to keep F in 0..255), F = S + (c - S)/a. It moves with the pupil as straight alpha (not an SDF), so at
@@ -203,6 +382,7 @@ def main():
       # body coverage reaches 1 texel under the outline (the outline is drawn on top), so the two AA edges never
       # leave a see-through seam between the white and the ink in the live render
       body_s = body | (outline & ndi.binary_dilation(body, np.ones((3, 3), bool)))
+      nat_s = nat | (outline & ndi.binary_dilation(nat, np.ones((3, 3), bool)))
       # HIGHLIGHT layer = the highlight pixels + their 1-px anti-aliased halo inside the pupil (lighter than the
       # local pupil colour), so a lagging highlight carries its own edge and leaves no ghost ring behind
       pcol_px = pupil_c & ~hl
@@ -221,11 +401,24 @@ def main():
         c = np.zeros((CH, CW, 4), np.uint8); aa = np.zeros((CH, CW)); aa[oy:oy + h, ox:ox + w] = alpha
         cr = np.zeros((CH, CW, 3), np.uint8); cr[oy:oy + h, ox:ox + w] = np.asarray(rgbsrc).clip(0, 255).astype(np.uint8)
         c[..., :3] = bleed(cr, aa > 0); c[..., 3] = np.round(aa * 255).astype(np.uint8); return c
-      cells = [cell(body_s, wcol), cell(pup_s, pcol), cell(core, sf), cell(hl_s, sf), cell(outline, sf), cella(fa, fcol)]
+      def cellw(m, mrgb, rgbsrc):                                           # SDF of m, colours defined on mrgb (bled)
+        c = np.zeros((CH, CW, 4), np.uint8); mm = np.zeros((CH, CW), bool); mm[oy:oy + h, ox:ox + w] = m
+        mr = np.zeros((CH, CW), bool); mr[oy:oy + h, ox:ox + w] = mrgb
+        cr = np.zeros((CH, CW, 3), np.uint8); cr[oy:oy + h, ox:ox + w] = np.asarray(rgbsrc).clip(0, 255).astype(np.uint8)
+        c[..., :3] = bleed(cr, mr); c[..., 3] = sdf8(mm); return c
+      wun = body_s | nat_s
+      # v6 LID component (drawn blink, Polly's own lid language: her thick upper lash line IS the lid edge). Per cell column:
+      # top / bottom of the eye opening (the white body incl. pupil), and the UPPER LASH = the outline ink above the
+      # opening's mid line (her lid stroke + the upper half of any side stroke). In a blink the lash slides down column-wise
+      # to the lower lash line, carrying the lavender lid shadow under it; whites / pupils are clipped to the opening below.
+      lash, prof, prof2 = lid_split(body, outline, ox, oy, w, h, CW, CH)
+      cells = [cellw(body_s, wun, wcol), cell(pup_s, pcol), cell(core, sf), cell(hl_s, sf), cell(outline, sf), cella(fa, fcol), cellw(nat_s, wun, wcol),
+               prof, cell(lash, sf), prof2]
       for k, c in enumerate(cells):
         col = s * NCELL + k
         atlas[row * CH:(row + 1) * CH, col * CW:(col + 1) * CW] = c
       Image.fromarray(rgba(hl_s)).save(f'{OUTD}/{e}-{side}-highlight.png')
+      Image.fromarray((nat * 255).astype(np.uint8)).save(f'{OUTD}/masks/{e}-{side}-nat.png')
       ink_px.append(sf[outline | core])
       # --- runtime geometry (cell px) ---
       bm = np.zeros((CH, CW), np.uint8); bm[oy:oy + h, ox:ox + w] = body
@@ -252,6 +445,7 @@ def main():
       else: rx, ry = 0.0, 0.0
       em['eyes'][side] = dict(anchor=[round(anc[0], 2), round(anc[1], 2)], refOrigin=[x0 - ox, y0 - oy],
                               poly=[[round(a, 2), round(b, 2)] for a, b in poly], hull=[[round(a, 2), round(b, 2)] for a, b in hull],
+                              npoly=npoly_of(nat_s, ox, oy, w, h, CW, CH),
                               range=[round(rx, 2), round(ry, 2)], hasPupil=bool(pm.any()),
                               pc=None if pc is None else [round(pc[0], 2), round(pc[1], 2)], bb=bb,
                               pivot=round(bb[1] + .62 * (bb[3] - bb[1]), 2), hasHl=bool(hpm.any()))

@@ -7,8 +7,8 @@ def _free_port():
   s = socket.socket(); s.bind(('127.0.0.1', 0)); p = s.getsockname()[1]; s.close(); return p
 
 class Page:
-  def __init__(self, w=620, h=680):
-    self.w, self.h = w, h; self.port = _free_port(); self.udd = tempfile.mkdtemp(prefix='cdp-chrome-')
+  def __init__(self, w=620, h=680, dpr=1):
+    self.w, self.h, self.dpr = w, h, dpr; self.port = _free_port(); self.udd = tempfile.mkdtemp(prefix='cdp-chrome-')
     self.proc = subprocess.Popen(['google-chrome', '--headless=new', '--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader',
       '--enable-unsafe-swiftshader', '--hide-scrollbars', '--mute-audio', '--no-first-run', '--disable-gpu-vsync',
       f'--window-size={w},{h}', f'--remote-debugging-port={self.port}', f'--user-data-dir={self.udd}', 'about:blank'],
@@ -21,7 +21,7 @@ class Page:
     self.ws = websocket.create_connection(tgt['webSocketDebuggerUrl'], suppress_origin=True, timeout=120)
     self.i = 0; self._errs = []
     for m in ('Runtime.enable', 'Log.enable', 'Page.enable'): self.send(m)
-    self.send('Emulation.setDeviceMetricsOverride', dict(width=w, height=h, deviceScaleFactor=1, mobile=False))
+    self.send('Emulation.setDeviceMetricsOverride', dict(width=w, height=h, deviceScaleFactor=dpr, mobile=False))
   def _event(self, r):
     m = r.get('method'); p = r.get('params', {})
     if m == 'Runtime.exceptionThrown':
@@ -52,6 +52,9 @@ class Page:
     return r.get('result', {}).get('value')
   def shot(self, path):
     r = self.send('Page.captureScreenshot', dict(format='png', captureBeyondViewport=False))
+    open(path, 'wb').write(base64.b64decode(r['data']))
+  def shot_clip(self, path, x, y, w, h):
+    r = self.send('Page.captureScreenshot', dict(format='png', captureBeyondViewport=False, clip=dict(x=x, y=y, width=w, height=h, scale=1)))
     open(path, 'wb').write(base64.b64decode(r['data']))
   def errors(self): return list(self._errs)
   def close(self):

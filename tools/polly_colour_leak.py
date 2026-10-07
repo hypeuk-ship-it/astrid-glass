@@ -1,7 +1,7 @@
 """Containment check independent of the shader's debug codes. QA-pose 1:1 colour renders at the rig's gaze limits
 (8 directions); per eye, the render is cropped at the eye's own atlas-cell origin (qaL / qaR) and classified with the
 reference colour classifier. Leak = a pupil / motif / highlight-coloured pixel (colour class, not white) outside the
-REFERENCE eye footprint (body | outline masks of that eye, placed in the cell; closure-squashed about the lid pivot
+REFERENCE eye footprint (body | outline | nat masks of that eye (nat = v5.1 bridged white contour), placed in the cell; closure-squashed about the lid pivot
 exactly like the shader when the lid follows a vertical gaze). Core ink is black like the outline, so it is covered by
 the debug-code sweep instead.
    python3 tools/polly_colour_leak.py [outdir]"""
@@ -17,8 +17,9 @@ CW, CH = rt['cw'], rt['ch']
 def ref_fp(e, side, close_scale, piv):
   bx = meta['eyes'][e][side]['bbox']; w, h = bx[2] - bx[0], bx[3] - bx[1]; ox, oy = (CW - w) // 2, (CH - h) // 2
   m = np.zeros((CH, CW), bool)
-  for nm in ('body', 'outline'):
-    m[oy:oy + h, ox:ox + w] |= np.asarray(Image.open(os.path.join(ROOT, f'emotes/polly-layers/masks/{e}-{side}-{nm}.png'))) > 127
+  for nm in ('body', 'outline', 'nat'):            # v5.1: nat = the natural white contour shown once the pupil moved
+    fn = os.path.join(ROOT, f'emotes/polly-layers/masks/{e}-{side}-{nm}.png')
+    if os.path.exists(fn): m[oy:oy + h, ox:ox + w] |= np.asarray(Image.open(fn)) > 127
   if abs(close_scale - 1) > 1e-4:                     # shader: t.y = piv + (t.y - piv) / s  (sample the cell squashed)
     ys = np.arange(CH) + .5; src = piv + (ys - piv) / max(close_scale, .03)
     idx = np.floor(src).astype(int); ok = (idx >= 0) & (idx < CH)

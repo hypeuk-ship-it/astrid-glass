@@ -135,7 +135,16 @@ uniform vec4  uLayQ;   // QA 1:1 blit: L cell origin xy, R cell origin zw (devic
 uniform vec4  uLayML;  // L pupil sprite: centre xy (cell texels), inverse rotation·scale (cos θ / s, sin θ / s) zw
 uniform vec4  uLayMR;  // R pupil sprite: same
 uniform vec4  uLayH;   // highlight offset relative to the pupil (texels, y down): L xy, R zw
-uniform vec4  uLayB;   // closure (lid/blink): L pivot y, R pivot y (cell texels), vertical scale, ink fill 0..1
+uniform vec4  uLayB;   // v6 lids: L lid closure 0..1, R lid closure, open-overshoot vertical stretch (>= 1), lower-lid share of the closure
+// v6 Polly brows / FX / nose shade (polly-deco-atlas.png, tools/build_polly_deco.py): per emote row L brow, L fx, R brow, R fx, mid fx, mid shade
+uniform sampler2D uDecoTex;
+uniform vec4  uDeco;   // x = on, y = row, z = 1/atlas W, w = 1/atlas H
+uniform vec4  uDecoC;  // cell w, cell h, eye anchor in the cell (x, y)
+uniform vec4  uDecoB;  // brow dy L, brow dy R (texels, + down), brow alpha, fx alpha
+uniform vec4  uDecoF;  // fx pulse scale L, R; brow squash (vertical scale) L, R
+uniform vec4  uDecoP;  // fx pulse centre L (x, y), R (x, y) (deco texels)
+uniform vec4  uDecoQ;  // brow squash pivot y L, R (deco texels: the brow's lower edge), sub-texel anchor x L, R
+uniform vec4  uDecoM;  // mid layer: texels per radian of lon (stretch to the rig's eye spacing), sub-texel anchor x, y, nose-shade strength (v6 review: 0)
 uniform vec4  uLayD;   // x = texels per device px at Z = 1 (live), y = debug codes, z = QA scale (1 = 1:1 exact), w unused
 uniform vec4  uShadow;  // eye drop shadow: strength, lat offset down (rad), gauss k (exp2), -
 uniform vec4  uShapeC;  // eye lid (radians): egg-centre offset, lid line (rel. to centre), corner k, -
@@ -192,9 +201,12 @@ float atlasStamp(vec2 p, vec4 stamp, float side){
 }
 
 // ---- Polly layered sprites (back -> front): white body, coloured pupil/motif, pupil-core ink, highlight (the three
-// moving layers are clipped to the white), closure (lid/blink), outline ink (unclipped, on top). Atlas: 5 cells per
-// eye (white, pupil, core, highlight, outline, fringe) x L/R; RGB = reference colours, A = signed distance field
+// moving layers are clipped to the white), LID (v6: her upper lash slides down over the eye, below), outline ink (on top).
+// Atlas: 10 cells per eye (white, pupil, core, highlight, outline, fringe, nat, lidprof, lash, lidprof2) x L/R; RGB = reference colours, A = signed distance field
 // (texels, a = .5 + d / (2 * LAY_R)); the fringe cell is straight alpha (the pupil's own anti-aliasing, unmixed). Coverage = SDF edge at the current texel/px scale, so edges stay crisp at any size;
+// v5.1: the white's coverage is the exact rest body while the pupil is home and the NATURAL white contour (nat cell: the
+// open eye edge bridged across where the rest pupil sat, pupil bulges trimmed) once it has moved > ~1-3.5 texels, so a dart
+// never leaves a pupil-shaped bite in the white. The white RGB is defined on both (one clean two-tone field).
 // at the exact 1:1 QA pose (hard = 1) it is a step at .5 at texel centres = the reference masks bit for bit.
 // No derivatives / extensions (Metal-portable): the px scale comes in as a uniform.
 const float LAY_R = 4.0;
@@ -206,25 +218,62 @@ vec4 layTex(float col, vec2 t){
 float layCov(float a, float s, float hard){
   return hard > 0.5 ? step(0.5, a) : clamp((a - 0.5) * (2.0 * LAY_R) / s + 0.5, 0.0, 1.0);
 }
-// closure: the whole eye stack squashes about the lower-lid pivot (blink / lid follow); sprites have no lid art
+// v6: the open overshoot of a blink is a small vertical stretch of the whole eye about its anchor (z >= 1; 1 = none).
+// The blink itself is the LID below (no squash any more: v5 squashed the whole stack and filled it with ink).
 vec2 layClose(vec2 t, float piv){ t.y = piv + (t.y - piv) / max(uLayB.z, 0.03); return t; }
+const float LAY_NC = 10.0;
+const float LAY_OV = 4.0;                                // texels
+// v6 LID (Polly's lid language: the thick upper lash line IS the lid edge; the lavender band under it is the lid shadow).
+// Per column (lidprof cell): top / bottom of the opening and the top of the upper lash (texels). Closure cl slides the lash
+// down column-wise by dd = cl * (1 - k) * H and the lower lash line up by ee = cl * k * H, so at cl = 1 the lash lands on the
+// lower line: her lash stroke, bent to the lower lid's curve = the drawn closed eye (thick ink arc). Returns the opening's
+// coverage at t (whites / pupils are clipped to it); dd, ee, lt (moved lash top) out.
+float layLid(vec2 t, float c0, float cl, float s, out float dd, out float ee, out float lt, out float ly){
+  vec2 tc = vec2(t.x, 0.5 * uLayC.y);
+  vec3 pr = layTex(c0 + 7.0, tc).rgb * uLayC.y;                    // top, bottom of the opening, clip top (column's top ink)
+  vec2 pq = layTex(c0 + 9.0, tc).rg;                               // lash top / CH, her lash thickness / 64
+  float hh = max(pr.y - pr.x, 0.0);
+  // + LAY_OV: the two lash lines overlap a little when shut, so the closed eye is ONE ink arc (no sliver between them)
+  float hc = cl * (hh + LAY_OV * smoothstep(0.6, 1.0, cl));
+  dd = (1.0 - uLayB.w) * hc; ee = uLayB.w * hc; lt = pr.z + dd;
+  // the lash rides down with its lower edge on the lid line; a steep (tall) lash run is squashed toward her lash thickness
+  // as it shuts, so the closed frame is an even arc and the eye's sides shorten instead of riding down as spikes
+  float run = max(pr.x - pq.x * uLayC.y, 0.5), th = max(mix(run, min(run, pq.y * 64.0 * 1.1), cl), 0.5);
+  ly = pr.x - (pr.x + dd - t.y) * run / th;
+  return clamp((t.y - pr.x - dd) / s + 0.5, 0.0, 1.0) * clamp((pr.y - ee - t.y) / s + 0.5, 0.0, 1.0);
+}
+// rest body -> natural white contour as the pupil leaves home (0 at rest and under the +-0.5 texel idle jitter)
+float layNatK(vec4 E){ return smoothstep(1.0, 3.5, length(E.zw)); }
 // pupil-sprite coords: gaze offset po, rotation/scale M about the pupil centre
 vec2 layPup(vec2 t, vec2 po, vec4 M){ vec2 v = t - po - M.xy; return M.xy + vec2(M.z * v.x + M.w * v.y, -M.w * v.x + M.z * v.y); }
-// one eye at cell coords t (closure applied by the caller) -> interior colour (white + moving layers + closure ink);
-// ab = body coverage, ao / oc = outline coverage / colour, mv = visible moving-layer coverage (after the clip to the
+// one eye at cell coords t (stretch applied by the caller) -> interior colour (white + moving layers, clipped to the lid
+// opening); ab = body coverage, ao / oc = outline coverage / colour, mv = visible moving-layer coverage (after the clip to the
 // white and under the outline), mp = moving coverage before the clip (debug / QA leak check)
-vec3 layEye(vec2 t, vec4 E, vec4 M, vec2 rel, float c0, float s, float hard, out float ab, out float ao, out vec3 oc, out float mv, out float mp){
+vec3 layEye(vec2 t, vec4 E, vec4 M, vec2 rel, float c0, float s, float hard, float cl, out float ab, out float ao, out vec3 oc, out float mv, out float mp){
+  float dd = 0.0, ee = 0.0, lt = 0.0, ly = 0.0, lw = 1.0;
+  bool lid = cl > 1e-4;                                              // rest / QA: exactly the v5 path
+  if (lid) lw = layLid(t, c0, cl, s, dd, ee, lt, ly);
   vec4 wb = layTex(c0, t);
-  ab = layCov(wb.a, s, hard);
-  vec3 col = wb.rgb;
+  ab = mix(layCov(wb.a, s, hard), layCov(layTex(c0 + 6.0, t).a, s, hard), layNatK(E)) * lw;
+  vec3 col = lid ? layTex(c0, vec2(t.x, t.y - dd)).rgb : wb.rgb;     // the lavender lid shadow rides down with the lash
   vec2 tp = layPup(t, E.zw, M);
-  vec4 fr = layTex(c0 + 5.0, tp); col = mix(col, fr.rgb, fr.a);     // pupil AA fringe (moves with the pupil)
+  // pupil AA fringe (moves with the pupil). v6 review: on the live path its baked (near-white) colour is tinted by the sclera
+  // it now sits on, so a pupil on the lavender band has no white halo; the 1:1 QA pose (hard) keeps the exact colour
+  vec4 fr = layTex(c0 + 5.0, tp); col = mix(col, hard > 0.5 ? fr.rgb : fr.rgb * min(col * (1.0 / 0.96), vec3(1.0)), fr.a);
   vec4 pp = layTex(c0 + 1.0, tp); float ap = layCov(pp.a, s, hard); col = mix(col, pp.rgb, ap);
   vec4 kc = layTex(c0 + 2.0, tp); float ak = layCov(kc.a, s, hard); col = mix(col, kc.rgb, ak);
   vec4 hh = layTex(c0 + 3.0, layPup(t - rel, E.zw, M)); float ah = layCov(hh.a, s, hard) * ap;   // clipped to the pupil
   col = mix(col, hh.rgb, ah);
-  col = mix(col, LAY_INK, uLayB.w);                                  // closed frame: the squashed eye reads as ink
-  vec4 ol = layTex(c0 + 4.0, t); ao = layCov(ol.a, s, hard); oc = ol.rgb;
+  if (!lid) { vec4 ol = layTex(c0 + 4.0, t); ao = layCov(ol.a, s, hard); oc = ol.rgb; }
+  else {
+    // lower lash line (outline minus the upper lash) rides up by ee; anything of it above the moved lash is gone (the
+    // opening is smaller now); the upper lash rides down by dd
+    vec2 ts = vec2(t.x, t.y + ee);
+    vec4 ol = layTex(c0 + 4.0, ts);
+    float aS = layCov(ol.a, s, hard) * (1.0 - layCov(layTex(c0 + 8.0, ts).a, s, hard)) * clamp((t.y - lt) / s + 0.5, 0.0, 1.0);
+    vec4 ls = layTex(c0 + 8.0, vec2(t.x, ly)); float aL = layCov(ls.a, s, hard);
+    ao = max(aS, aL); oc = aL >= aS ? ls.rgb : ol.rgb;
+  }
   mp = max(max(ap, ak), ah); mv = mp * ab * (1.0 - ao);
   return col;
 }
@@ -238,13 +287,13 @@ vec3 layQA(vec3 col){
     vec4 E = i == 0 ? uLayL : uLayR;
     vec4 M = i == 0 ? uLayML : uLayMR;
     vec2 rel = i == 0 ? uLayH.xy : uLayH.zw;
-    float piv = i == 0 ? uLayB.x : uLayB.y;
-    float c0 = i == 0 ? 0.0 : 6.0;
+    float cl = i == 0 ? uLayB.x : uLayB.y;
+    float c0 = i == 0 ? 0.0 : LAY_NC;
     vec2 t = hard > 0.5 ? floor(fp - o) + 0.5 : (fp - o) / k;
     if (t.x < 0.0 || t.y < 0.0 || t.x > uLayC.x || t.y > uLayC.y) continue;
-    t = layClose(t, piv);
+    t = layClose(t, E.y);
     float ab, ao, mv, mp; vec3 oc;
-    vec3 ci = layEye(t, E, M, rel, c0, 1.0 / k, hard, ab, ao, oc, mv, mp);
+    vec3 ci = layEye(t, E, M, rel, c0, 1.0 / k, hard, cl, ab, ao, oc, mv, mp);
     col = mix(mix(col, ci, ab), oc, ao);
     dbg = max(dbg, uLayD.y > 1.5 ? vec3(ab, mv, ao) : vec3(ab, mv, mp * (1.0 - ao)));   // 1: leak codes, 2: outline
   }
@@ -428,26 +477,88 @@ float sdAngerMark(vec2 p, float side, vec2 b, float n){
 // eye shading for one chroma tap, given its sphere coordinates (lon, lat) and visible-hemisphere Z
 // Polly layered sprites (live path): cell texel coords of a sphere point (same eye-local u, v as eyeTap), closure
 // applied; c0 = the eye's first atlas column
-vec2 layT(float lon, float lat, out float c0, out vec4 E, out vec4 M, out vec2 rel){
-  float side = lon < 0.0 ? -1.0 : 1.0;
+// eye-local sphere point -> texels relative to that eye's anchor (no stretch); shared by the eye layers and the deco
+vec2 layRel(float lon, float lat, float side){
   float u = lon - uShapeT.w * side;
   float v = lat - uEyeK2.z + uEyeK2.w * u * u;
-  c0 = side > 0.0 ? 6.0 : 0.0; E = side > 0.0 ? uLayR : uLayL; M = side > 0.0 ? uLayMR : uLayML;
+  return vec2(u, -(v - uShapeC.x)) * uLayC.z;
+}
+vec2 layT(float lon, float lat, out float c0, out vec4 E, out vec4 M, out vec2 rel){
+  float side = lon < 0.0 ? -1.0 : 1.0;
+  c0 = side > 0.0 ? LAY_NC : 0.0; E = side > 0.0 ? uLayR : uLayL; M = side > 0.0 ? uLayMR : uLayML;
   rel = side > 0.0 ? uLayH.zw : uLayH.xy;
-  return layClose(E.xy + vec2(u, -(v - uShapeC.x)) * uLayC.z, side > 0.0 ? uLayB.y : uLayB.x);
+  return layClose(E.xy + layRel(lon, lat, side), E.y);
 }
 float layBodyA(float lon, float lat, float s){ float c0; vec4 E, M; vec2 rel; vec2 t = layT(lon, lat, c0, E, M, rel);
-  return layCov(layTex(c0, t).a, s, 0.0); }
+  float cl = c0 > 0.5 ? uLayB.y : uLayB.x, dd, ee, lt, ly, lw = cl > 1e-4 ? layLid(t, c0, cl, s, dd, ee, lt, ly) : 1.0;
+  return lw * mix(layCov(layTex(c0, t).a, s, 0.0), layCov(layTex(c0 + 6.0, t).a, s, 0.0), layNatK(E)); }
+// v6 deco: Polly's own brows, FX (anger marks, blush, tears) and nose shade, straight alpha, in eye-anchor texels.
+// Both eyes' cells are sampled everywhere (each holds only its half of the face), so nothing seams at the midline.
+vec4 decoTex(float col, vec2 d){
+  if (d.x < 0.0 || d.y < 0.0 || d.x > uDecoC.x || d.y > uDecoC.y) return vec4(0.0);
+  vec2 c = clamp(d, vec2(0.5), uDecoC.xy - 0.5);
+  return texture2D(uDecoTex, (vec2(col * uDecoC.x, uDeco.y * uDecoC.y) + c) * uDeco.zw);
+}
+// back (under the eyes, as on her sheet): the MID layer (midline-crossing blush smudge + nose shade, centred on the face
+// midline and stretched sideways to the rig's eye spacing: uDecoM.x = texels per radian of lon) and each eye's FX.
+// v6 review: everything here is masked by the OPEN eye's footprint (rest white | natural white | outline, no lid), so art
+// her sheet keeps hidden under the eyes stays hidden when the lid closes (v6 showed the nose shade / blush band as a grey
+// or brown slab on every shut frame). The nose shade itself is off on the live path (uDecoM.w = 0: on the glass it read
+// as a dark grey rectangle between the eyes).
+float layFoot(float lon, float lat, float s){
+  float c0; vec4 E, M; vec2 rel; vec2 t = layT(lon, lat, c0, E, M, rel);
+  float fw = max(layCov(layTex(c0, t).a, s, 0.0), layCov(layTex(c0 + 6.0, t).a, s, 0.0));
+  return max(fw, layCov(layTex(c0 + 4.0, t).a, s, 0.0));
+}
+vec3 layDecoBack(vec3 col, float lon, float lat, float vis, float Z){
+  vis *= 1.0 - layFoot(lon, lat, uLayD.x / (0.5 * Z + 0.5));
+  vec2 dm = vec2(lon * uDecoM.x, -(lat - uEyeK2.z + uEyeK2.w * lon * lon - uShapeC.x) * uLayC.z) + uDecoC.zw + uDecoM.yz;
+  vec4 sh = decoTex(5.0, dm); col *= mix(vec3(1.0), sh.rgb, sh.a * vis * uDecoB.w * uDecoM.w);   // nose shade: multiply
+  vec4 mf = decoTex(4.0, dm); col = mix(col, mf.rgb, mf.a * vis * uDecoB.w);
+  for (int i = 0; i < 2; i++) {
+    float side = i == 0 ? -1.0 : 1.0, c0 = i == 0 ? 0.0 : 2.0;
+    vec2 d = layRel(lon, lat, side) + uDecoC.zw + vec2(i == 0 ? uDecoQ.z : uDecoQ.w, 0.0);
+    float fs = i == 0 ? uDecoF.x : uDecoF.y;                         // fx pulse about its own centre
+    vec2 fc = i == 0 ? uDecoP.xy : uDecoP.zw;
+    vec4 fx = decoTex(c0 + 1.0, fc + (d - fc) / max(fs, 0.2));
+    col = mix(col, fx.rgb, fx.a * vis * uDecoB.w);
+  }
+  return col;
+}
+// front: her brows (own offset + squash toward the brow's base, on springs)
+vec3 layDeco(vec3 col, float lon, float lat, float vis){
+  for (int i = 0; i < 2; i++) {
+    float side = i == 0 ? -1.0 : 1.0, c0 = i == 0 ? 0.0 : 2.0;
+    vec2 d = layRel(lon, lat, side) + uDecoC.zw + vec2(i == 0 ? uDecoQ.z : uDecoQ.w, 0.0);
+    float by = i == 0 ? uDecoB.x : uDecoB.y, bs = i == 0 ? uDecoF.z : uDecoF.w, bq = i == 0 ? uDecoQ.x : uDecoQ.y;
+    vec2 db = d - vec2(0.0, by);
+    db.y = bq + (db.y - bq) / max(bs, 0.2);
+    vec4 br = decoTex(c0, db);
+    col = mix(col, br.rgb, br.a * vis * uDecoB.z);
+  }
+  return col;
+}
+// Polly glass RGB split on the eye edge: a fraction of the shared chroma offset (subtle glass, clean shapes); the classic
+// shapes keep the full split (their path does not come here)
+// v5.2: 0.12 (v5 1.0, v5.1 0.3). Past the centre tap's body edge the side-tap channel shows the WHITE colour only, so
+// no pupil / motif colour can ever be drawn outside the white (v5.1 mixed the full sprite colour into R / B).
+const float LAY_CHROMA = 0.12;
 // sprite colours on the sphere: the whole stack comes from the centre tap (all three channels); only the body's own
 // edge keeps the glass RGB split (the side taps' body coverage), so sprite detail never gets colour fringes.
 vec3 layEyes(vec3 col, float lon, float lat, float Z, vec3 dl){
   float c0; vec4 E, M; vec2 rel; vec2 t = layT(lon, lat, c0, E, M, rel);
   float vl = uEyeP.z * smoothstep(0.02, 0.08, Z);
-  float s = uLayD.x / ((0.5 * Z + 0.5) * max(min(uLayB.z, 1.0), 0.03));   // texels per px (foreshortened, squashed)
+  // texels per px (foreshortened; squashed: geometric mean of the x (1) and y (1 / squash) footprints, capped). v5 used the
+  // full 1 / squash: near shut the AA ramp grew past the +-4 texel SDF range and the whole eye capsule took ~50 % ink
+  // (two dark discs on every blink / swap frame).
+  float s = uLayD.x / (0.5 * Z + 0.5);
   float ab, ao, mv, mp; vec3 oc;
-  vec3 ci = layEye(t, E, M, rel, c0, s, 0.0, ab, ao, oc, mv, mp);
-  float aR = layBodyA(lon + dl.x, lat + dl.y, s), aB = layBodyA(lon - dl.x, lat - dl.y, s);
-  vec3 c = vec3(mix(col.r, ci.r, aR), mix(col.g, ci.g, ab), mix(col.b, ci.b, aB));
+  vec3 ci = layEye(t, E, M, rel, c0, s, 0.0, c0 > 0.5 ? uLayB.y : uLayB.x, ab, ao, oc, mv, mp);
+  vec2 dq = dl.xy * LAY_CHROMA;
+  float aR = layBodyA(lon + dq.x, lat + dq.y, s), aB = layBodyA(lon - dq.x, lat - dq.y, s);
+  vec3 cw = layTex(c0, t).rgb;                                       // white colour (for the side taps past the edge)
+  float kR = aR > ab ? ab / max(aR, 1e-4) : 1.0, kB = aB > ab ? ab / max(aB, 1e-4) : 1.0;
+  vec3 c = vec3(mix(col.r, mix(cw.r, ci.r, kR), aR), mix(col.g, ci.g, ab), mix(col.b, mix(cw.b, ci.b, kB), aB));
   c = mix(c, oc, ao);
   return mix(col, c, vl);
 }
@@ -580,9 +691,12 @@ vec3 eyes(vec3 col, vec2 p, vec2 off){
   float rimA = 0.0;                                            // ≥ 0 on the centre tap, ≤ 0 on the side taps
   if (uQA < 0.5 && uToon.x > 0.0) { rimA = eyeRim(lon, lat, Z); col = mix(col, uToonCol, rimA); }
   // Polly layers first, then brows (stroke) and FX (anger marks, blush) on top of them (layer order)
+  if (uLay.x > 0.5 && uDeco.x > 0.5) col = layDecoBack(col, lon, lat, uEyeP.z * smoothstep(0.02, 0.08, Z), Z);
   if (uLay.x > 0.5) col = layEyes(col, lon, lat, Z, dl);
+  // v6: Polly's own brows / FX / nose shade (sprites from her sheet) replace the stroke brows + anger marks on that path
+  if (uLay.x > 0.5 && uDeco.x > 0.5) col = layDeco(col, lon, lat, uEyeP.z * smoothstep(0.02, 0.08, Z));
   // emote stroke brows (arched tapered capsules + dark outline) + anger marks + soft blush
-  if (uQA < 0.5 && uMotif.z > 0.0) {
+  else if (uQA < 0.5 && uMotif.z > 0.0) {
     float side = lon < 0.0 ? -1.0 : 1.0;
     float u = lon - uShapeT.w * side;
     float v = lat - uEyeK2.z + uEyeK2.w * u * u;
@@ -601,7 +715,7 @@ vec3 eyes(vec3 col, vec2 p, vec2 off){
       col = mix(col, uMotifCol, mv * 0.95);
     }
   }
-  if (uQA < 0.5 && uMotif.w > 0.0) {
+  if (uQA < 0.5 && uMotif.w > 0.0 && uLay.x < 0.5) {   // not on the Polly layer path (v5.2: it drew a thin ring there)
     // blush: soft ellipses just below/outside each eye (love / blush poses)
     float side = lon < 0.0 ? -1.0 : 1.0;
     float u = lon - uShapeT.w * side + side * uEyeA.x * .55;
@@ -739,10 +853,10 @@ void main(){
   gl_Position = vec4(aPos, 0.0, 1.0);
 }
 </script>
-<script src="coats.js?v=10071053"></script>
-<script src="springs.js?v=10071053"></script>
-<script src="face.js?v=10071053"></script>
-<script src="emotes.js?v=10071053"></script>
+<script src="coats.js?v=10071435"></script>
+<script src="springs.js?v=10071435"></script>
+<script src="face.js?v=10071435"></script>
+<script src="emotes.js?v=10071435"></script>
 <script>
 (function(){
 'use strict';
@@ -816,7 +930,7 @@ const toFallback=why=>{console.warn('Astrid: '+why+', using the SVG fallback'); 
 const gl=cv.getContext('webgl',GL_OPTS)||cv.getContext('experimental-webgl',GL_OPTS);
 if(!gl){ toFallback('WebGL unavailable'); return; }
 const UNIFORMS=['uVS','uBodyM','uNT','uWarp','uPaper','uCore','uDeep','uMid','uEdge','uHalo','uEye','uEyeHi','uEyeLo','uGlow','uBloomCol','uLiftCol','uTouchCol','uAura','uMode',
-  'uRot','uEyeP','uEyeA','uShape','uShapeT','uShapeC','uAsym','uCutN','uLat','uShadow','uToon','uToonR','uRimP','uPupil','uPupilA','uPupilM','uPupilC','uMotif','uMotifCol','uBrow','uBrowCol','uBrowX','uToonCol','uQA','uEyeAtlas','uAtlas','uStampL','uStampR','uLayTex','uLay','uLayC','uLayL','uLayR','uLayQ','uLayML','uLayMR','uLayH','uLayB','uLayD','uEyeL','uEyeR','uEyeK','uEyeK2','uFace','uQ','uBA','uBB','uBC','uCA','uCB','uCC','uFrost','uPoolK','uFringeK','uMisc','uTouch'];
+  'uRot','uEyeP','uEyeA','uShape','uShapeT','uShapeC','uAsym','uCutN','uLat','uShadow','uToon','uToonR','uRimP','uPupil','uPupilA','uPupilM','uPupilC','uMotif','uMotifCol','uBrow','uBrowCol','uBrowX','uToonCol','uQA','uEyeAtlas','uAtlas','uStampL','uStampR','uLayTex','uLay','uLayC','uLayL','uLayR','uLayQ','uLayML','uLayMR','uLayH','uLayB','uLayD','uDecoTex','uDeco','uDecoC','uDecoB','uDecoF','uDecoP','uDecoQ','uDecoM','uEyeL','uEyeR','uEyeK','uEyeK2','uFace','uQ','uBA','uBB','uBC','uCA','uCB','uCC','uFrost','uPoolK','uFringeK','uMisc','uTouch'];
 let U={}, lost=false; const GN=24, GCOUNT=GN*GN*6;
 const draw=()=>gl.drawElements(gl.TRIANGLES,GCOUNT,gl.UNSIGNED_SHORT,0);
 /* The program comes in two variants: plain, and with '#define TOON' (the toon eye layer). Only the variant in
@@ -949,6 +1063,13 @@ function prepLayers(j){
     const E={poly,n,hx,hy,m,rest,rx:e.range[0],ry:e.range[1],ax:e.anchor[0],ay:e.anchor[1],ox0:e.refOrigin[0],oy0:e.refOrigin[1],pd:new Float64Array(m),pgx:new Float64Array(m),pgy:new Float64Array(m),
              pcx:pc[0],pcy:pc[1],piv:e.pivot,hasHl:!!e.hasHl,hasPupil:!!e.hasPupil};
     for(let i=0;i<m;i++) rest[i]=Math.max(0,sdPoly(E,hx[i],hy[i]));        // rest penetration = allowance
+    // v5.2: containment runs against the NATURAL white (npoly = the nat cell's contour: what the shader shows once the
+    // pupil has moved); each hull point's allowance is its rest penetration of that contour, faded out over the first
+    // 1-4 texels of travel, so a pupil cropped at rest keeps its exact rest pose but can never carry that crop onto
+    // another edge (v5.1 let a pupil cropped on its inner edge sink the same depth into the bottom / top edge).
+    const np_=e.npoly||e.poly, nn=np_.length, npoly=new Float64Array(2*nn); np_.forEach((q,i)=>{npoly[2*i]=q[0]; npoly[2*i+1]=q[1];});
+    E.N={poly:npoly,n:nn}; E.restN=new Float64Array(m); for(let i=0;i<m;i++) E.restN[i]=Math.max(0,sdPoly(E.N,hx[i],hy[i]));
+    let x0=1e9,x1=-1e9; for(let i=0;i<m;i++){ x0=Math.min(x0,hx[i]); x1=Math.max(x1,hx[i]); } E.pw=m?x1-x0:0;   // pupil hull width (texels)
     LAYE[id+'-'+sd]=E; }); });
 }
 function loadLayerAtlas(){
@@ -972,8 +1093,34 @@ function loadLayerAtlas(){
     }catch(e){ console.warn('Astrid: Polly layer atlas unavailable ('+e.message+'), using the silhouette atlas'); layFail=true; gl.activeTexture(gl.TEXTURE0); }
     if(window.__astrid&&window.__astrid.kick) window.__astrid.kick(); };
   img.onload=()=>{ imgOk=true; done(); }; img.onerror=()=>{ layFail=true; };
-  img.src='polly-layer-atlas.png?v=10071053';
-  fetch('polly-layer-atlas.json?v=10071053').then(r=>r.json()).then(j=>{ meta=j; done(); }).catch(()=>{ layFail=true; });
+  img.src='polly-layer-atlas.png?v=10071435';
+  fetch('polly-layer-atlas.json?v=10071435').then(r=>r.json()).then(j=>{ meta=j; done(); }).catch(()=>{ layFail=true; });
+}
+/* v6: Polly's own brows / FX / nose shade (polly-deco-atlas.png / .json, tools/build_polly_deco.py), texture unit 2 */
+let decoTex=null, decoReady=false, decoMeta=null, decoFail=Q.has('nodeco');   // ?nodeco: QA leak sweep without brows / FX
+function loadDecoAtlas(){
+  if(decoTex||decoFail) return;
+  decoTex=gl.createTexture();
+  gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, decoTex);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array([0,0,0,0]));
+  gl.activeTexture(gl.TEXTURE0);
+  const img=new Image(); let meta=null, imgOk=false;
+  const done=()=>{ if(!meta||!imgOk) return;
+    try{
+      gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, decoTex);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
+      gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL,gl.NONE);
+      gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,img);
+      gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL,gl.BROWSER_DEFAULT_WEBGL);
+      gl.activeTexture(gl.TEXTURE0);
+      decoMeta=meta; decoReady=true;
+    }catch(e){ console.warn('Astrid: Polly deco atlas unavailable ('+e.message+'), stroke brows'); decoFail=true; gl.activeTexture(gl.TEXTURE0); }
+    if(window.__astrid&&window.__astrid.kick) window.__astrid.kick(); };
+  img.onload=()=>{ imgOk=true; done(); }; img.onerror=()=>{ decoFail=true; };
+  img.src='polly-deco-atlas.png?v=10071435';
+  fetch('polly-deco-atlas.json?v=10071435').then(r=>r.json()).then(j=>{ meta=j; done(); }).catch(()=>{ decoFail=true; });
 }
 /* signed distance (texels, + outside) from (x, y) to the body polygon; LG = its gradient (unit, outward) */
 const LG={x:.5,y:.5};
@@ -991,11 +1138,15 @@ function sdPoly(E,x,y){
    at rest the push is exactly 0); a C¹ soft hinge of the max pushes the offset along the softmax-weighted inward
    normal, 4 fixed iterations → continuous in the gaze (spring-friendly, no popping). Result → LCO.x, LCO.y. */
 const LCO={x:.5,y:.5}, LCK={tau:.35,hinge:.4};
+const LAY_NASAL=0, LAY_BAL=1.35, LAY_TMIN=9;   // v6 review: nasal give-back .4 -> 0 (it pushed resting pupils that already
+// touch the nasal edge past her outline, onto the skin: angry / confident / pleading glances); the temporal eye may now travel
+// LAY_TMIN texels (was 2) beyond LAY_BAL x the nasal eye's travel, so a sideways glance still reads   // v5.2: give-back .35 -> .4; temporal travel cap vs the nasal eye   // nasal give-back cap (× pupil hull width), see pushUniforms
 function containLayer(E,ox,oy,sc){
   const m=E.m, tau=LCK.tau, kh=LCK.hinge, k=sc||1, cx=E.pcx, cy=E.pcy; let dx=0, dy=0;
+  const r=Math.hypot(ox,oy), u=Math.max(0,Math.min(1,(r-1)/3)), fade=1-u*u*(3-2*u);   // allowance: 1 below 1 texel, 0 past 4
   for(let it=0;it<5;it++){
     let mx=-1e18;
-    for(let i=0;i<m;i++){ const d=sdPoly(E,cx+(E.hx[i]-cx)*k+ox+dx,cy+(E.hy[i]-cy)*k+oy+dy)-E.rest[i]-kh; E.pd[i]=d; E.pgx[i]=LG.x; E.pgy[i]=LG.y; if(d>mx) mx=d; }
+    for(let i=0;i<m;i++){ const d=sdPoly(E.N,cx+(E.hx[i]-cx)*k+ox+dx,cy+(E.hy[i]-cy)*k+oy+dy)-E.restN[i]*fade-kh; E.pd[i]=d; E.pgx[i]=LG.x; E.pgy[i]=LG.y; if(d>mx) mx=d; }
     const s=mx<=-kh?0:mx<kh?(mx+kh)*(mx+kh)/(4*kh):mx;
     if(s<=0||it===4) break;
     let nx=0, ny=0; for(let i=0;i<m;i++){ const w=Math.exp((E.pd[i]-mx)/tau); nx+=w*E.pgx[i]; ny+=w*E.pgy[i]; }
@@ -1005,12 +1156,13 @@ function containLayer(E,ox,oy,sc){
 }
 const LAYS={on:0,row:-1,id:'',cur:'',offL:[0,0],offR:[0,0],rawL:[0,0],rawR:[0,0],qaL:[0,0],qaR:[0,0],tpr:0,dbg:0,qaScale:1};
 const vLay=new Float32Array(4), vLayC=new Float32Array(4), vLayL=new Float32Array(4), vLayR=new Float32Array(4), vLayQ=new Float32Array(4),
-      vLayML=new Float32Array(4), vLayMR=new Float32Array(4), vLayH=new Float32Array(4), vLayB=new Float32Array(4), vLayD=new Float32Array(4);
+      vLayML=new Float32Array(4), vLayMR=new Float32Array(4), vLayH=new Float32Array(4), vLayB=new Float32Array(4), vLayD=new Float32Array(4),
+      vDeco=new Float32Array(4), vDecoC=new Float32Array(4), vDecoB=new Float32Array(4), vDecoF=new Float32Array(4), vDecoP=new Float32Array(4), vDecoQ=new Float32Array(4), vDecoM=new Float32Array(4);
 
 function initGL(){              // (re)build everything GPU-side; also used after a context restore
   prog=null;                    // a restored context has no old program to delete
   if(!buildProg(progToon)) return false;
-  loadEyeAtlas(); loadQAMasks(); layTex=null; layReady=false; loadLayerAtlas();
+  loadEyeAtlas(); loadQAMasks(); layTex=null; layReady=false; loadLayerAtlas(); decoTex=null; decoReady=false; loadDecoAtlas();
   // one draw call: a GN×GN grid over the canvas (the vertex stage carries the smooth per-pixel work)
   const v=new Float32Array((GN+1)*(GN+1)*2), ix=new Uint16Array(GN*GN*6);
   for(let j=0,k=0;j<=GN;j++) for(let i=0;i<=GN;i++){v[k++]=i/GN*2-1; v[k++]=j/GN*2-1;}
@@ -1336,6 +1488,7 @@ function clearMotif(){ MOTIF.typ=0; MOTIF.brow=0; MOTIF.blush=0; MOTIF.mark=0; }
 function applyEmoteMeta(e){
   // Polly layers on screen and another Polly emotion requested: its brows / lids wait for the closed frame
   if(e&&typeof LAYS!=='undefined'&&LAYS.cur&&layReady&&layMeta.emotes[e.id]&&e.id!==LAYS.cur&&!(qaMode&&!LAYS.dbg)&&!forced){ LZ.meta=e; setToon(true); return; }
+  try{ LZ.meta=null; }catch(_){}                         // an older deferred request must not be flushed later
   applyEmoteMetaNow(e);
 }
 function applyEmoteMetaNow(e){
@@ -1533,9 +1686,12 @@ function pupilLife(){        // toon pupils: dilation (mostly inside blinks) + d
 }
 /* ================= Polly layered rig: life (springs only; every value snaps to the reference pose in ?qa / ?still /
    forced poses, so the QA pose stays 1:1) =================
-   closure (lid / blink / expression swap): lClose 0 open … 1 shut. Fast close (≈50 ms to 90%), ALL layers swap on
-     the closed frame (≥ .9; pop emotions swap on a squash frame instead), 1–2 frame hold, slower under-damped reopen
-     (≈130 ms, 3–6% overshoot = a small stretch). The squashed eye fills with ink near shut, so it reads as a lid line.
+   closure (lid / blink / expression swap): lClose 0 open … 1 shut. v6: a DRAWN blink. Polly's upper lash (her lid line)
+     slides down over the eye carrying the lavender lid shadow, the lower lash line rises a little (14 %), they meet as her
+     closed-eye ink arc; whites / pupils are clipped to the shrinking opening (glass.frag layLid). Phases (springs only):
+     close ≈100 ms (eases in) → hold ≈60 ms on the drawn closed frame → reopen ≈170 ms with ≈4–5 % overshoot (a small
+     vertical stretch), all per emotion (sleepy slow + half blinks, angry quick + rare). ALL layers swap on the closed
+     frame (≥ .9; pop emotions swap at .97 and reopen springier).
    gaze: darts + holds. A dart retargets a stiff spring (≈3 frames, ~3% overshoot) to 93% of the way (undershoot), then
      a glissade to the target 70 ms later; holds ≥ 150 ms (+ exponential), a dead zone so pointer drift waits for the
      next dart, ±0.5 px idle jitter at ~1–2 Hz, a blink on big shifts. Lid follows the vertical gaze (closure).
@@ -1550,17 +1706,30 @@ ALL.push(lClose,lpX,lpY,dil,spinV,mS[0],mS[1],mR[0],mR[1],hlS[0],hlS[1],hlS[2],h
 const LAY_POP=new Set(['starry','love','furious']), LAY_AROUSE={love:.007,pleading:.006,starry:.006,furious:-.006};
 /* per-emotion blink clock: g = median gap ms (log-normal, σ s), h = closed hold ms, reopen spring k/d, dbl = double-
    blink chance, half = half-blink chance. Close is always the fast spring (≈2× quicker than the reopen). */
-const LAY_BLINK={_:{g:3600,s:.45,h:90,k:.16,d:.62,dbl:.15,half:0},
-  sleepy:{g:4800,s:.4,h:220,k:.07,d:.75,dbl:0,half:.45}, bored:{g:5200,s:.4,h:150,k:.09,d:.72,dbl:0,half:.2},
-  angry:{g:8000,s:.35,h:80,k:.18,d:.6,dbl:0,half:0}, furious:{g:9500,s:.35,h:70,k:.2,d:.58,dbl:0,half:0},
-  pleading:{g:2400,s:.5,h:80,k:.16,d:.62,dbl:.35,half:0}, blush:{g:2600,s:.5,h:90,k:.16,d:.62,dbl:.3,half:0}};
-const LZ={pending:'',pop:false,ink:true,meta:null,holdUntil:-1,halfT:1.08,log:[]};
+/* v6: ck/cd = close spring (to 1.02: ≈.97 shut after ~100 ms default / angry, ~133 bored, ~150 sleepy), h = hold on the drawn closed
+   frame (ms, from the frame it reaches .97), k/d = reopen spring (≈150–200 ms to < 5 % with 4–5 % overshoot; sleepy none) */
+const LAY_BLINK={_:{g:3600,s:.45,h:35,ck:.4,cd:.45,k:.10,d:.67,dbl:.15,half:0},
+  sleepy:{g:4800,s:.4,h:130,ck:.15,cd:.6,k:.05,d:.7,dbl:0,half:.45}, bored:{g:5200,s:.4,h:70,ck:.2,cd:.55,k:.075,d:.71,dbl:0,half:.2},
+  angry:{g:8000,s:.35,h:20,ck:.5,cd:.42,k:.13,d:.64,dbl:0,half:0}, furious:{g:9500,s:.35,h:20,ck:.5,cd:.42,k:.13,d:.64,dbl:0,half:0},
+  pleading:{g:2400,s:.5,h:40,ck:.4,cd:.45,k:.11,d:.66,dbl:.35,half:0}, blush:{g:2600,s:.5,h:35,ck:.4,cd:.45,k:.10,d:.67,dbl:.3,half:0}};
+const LAY_LOWER=.14;                                                  // lower lid's share of the closure
+const LAY_SWAP_AT=.97;   // expression swap: last + current tick both >= this closed (the lash arc is shut from ~.95)
+const LAY_NOSE=0;   // v6 review: her grey nose shade off on the live glass (it read as a dark rectangle between / under shut eyes)
+/* v6 review: head / face parallax on the Polly rig. The classic head turn (yaw ±.5, pitch ±.34 rad) slid her face ~45 % of
+   the orb radius and clipped the whites; on her rig the gaze lives in the pupils (inside the whites) and the face only
+   turns LAY_HEAD of that (≈ ±.06 / ±.04 rad ≈ 3 % of the orb). A spring (1 = classic, untouched) blends a shape switch. */
+const LAY_HEAD=.12, headK=spring(1,.08,.75);
+/* v6 brows (her sprites): own springs; dip + squash a little with every blink (lagging the lid), lift on up-gaze */
+const bwY=[spring(0,.2,.6),spring(0,.2,.6)], bwS=[spring(1,.2,.6),spring(1,.2,.6)], fxS=[spring(1,.15,.75),spring(1,.15,.75)];
+ALL.push(bwY[0],bwY[1],bwS[0],bwS[1],fxS[0],fxS[1],headK);
+const LAY_FXPULSE=new Set(['angry','furious']);
+const LZ={pending:'',pop:false,ink:true,meta:null,holdUntil:-1,halfT:1.02,log:[],sw:false,bp:0,bHold:0,fxAt:0};   // sw: a swap blink/squash is running (brows squash with it)
 const GZ={tx:0,ty:0,fx:0,fy:0,glAt:-1,holdUntil:0,jitAt:0,jx:0,jy:0,darts:0};
 const MF={next:[0,0],ang:[0,0],pang:[0,0],lub:-1};
 const gauss=()=>(Math.random()+Math.random()+Math.random()+Math.random()-2)*1.7320508;   // Irwin–Hall ≈ N(0,1)
 function layBlink(){                       // one scheduled blink for the displayed emotion
   const B=LAY_BLINK[LAYS.cur]||LAY_BLINK._;
-  LZ.halfT=Math.random()<B.half?.62:1.08;
+  LZ.halfT=Math.random()<B.half?.62:1.02;
   blink(B.h);
   if(Math.random()<B.dbl) doubleAt=CK.simT+B.h+170+Math.random()*80;
   nextBlink=CK.simT+Math.max(900,B.g*Math.exp(B.s*gauss()));
@@ -1570,7 +1739,7 @@ function laySwap(id){
   const was=LAYS.cur; LAYS.cur=id; layFlushMeta();
   MF.ang[0]=MF.ang[1]=MF.pang[0]=MF.pang[1]=0; snap(spinV,0); MF.next[0]=MF.next[1]=CK.simT+250; MF.lub=-1;
   if(LAY_AROUSE[id]&&!still&&!forced&&!(qaMode&&!LAYS.dbg)) dil.v+=LAY_AROUSE[id];
-  LZ.log.push({t:+CK.simT.toFixed(1),from:was,to:id,closure:+lClose.x.toFixed(3),pop:LZ.pop}); if(LZ.log.length>20) LZ.log.shift();
+  LZ.log.push({t:+CK.simT.toFixed(1),from:was,to:id,closure:+lClose.x.toFixed(3),closurePrev:+lClose.px.toFixed(3),pop:LZ.pop}); if(LZ.log.length>20) LZ.log.shift();
 }
 function layLife(){
   const rest=still||forced||(qaMode&&!LAYS.dbg);                     // the debug sweep animates inside the QA blit
@@ -1578,18 +1747,31 @@ function layLife(){
   const tgt=(layReady&&eyesName.indexOf('polly-')===0&&layMeta.emotes[eyesName.slice(6)])?eyesName.slice(6):'';
   if(!tgt){ if(SH.a===SH.b||shapeT.x>=.5){ LAYS.cur=''; } LZ.pending=''; layFlushMeta(); }
   else if(!LAYS.cur){ if(SH.a===SH.b||shapeT.x>=.5||F.SHAPES[SH.a].name==='polly-'+tgt) laySwap(tgt); }
-  else if(tgt!==LAYS.cur){ if((qaMode&&!LAYS.dbg)||forced) { LZ.pending=''; laySwap(tgt); } else if(LZ.pending!==tgt){ LZ.pending=tgt; LZ.pop=LAY_POP.has(tgt); LZ.ink=!LZ.pop; } }
+  else if(tgt!==LAYS.cur){ if((qaMode&&!LAYS.dbg)||forced) { LZ.pending=''; laySwap(tgt); } else if(LZ.pending!==tgt){ LZ.pending=tgt; LZ.pop=LAY_POP.has(tgt); LZ.ink=!LZ.pop; LZ.sw=true; } }
   else if(LZ.pending){ LZ.pending=''; }
   // closure
   const B=LAY_BLINK[LAYS.cur]||LAY_BLINK._;
   let tc=0;
-  if(LZ.pending) tc=LZ.pop?.97:1.08;
-  else if(CK.simT<LZ.holdUntil) tc=LZ.pop?.97:1.08;
-  else if(CK.simT<blinkUntil){ tc=LZ.halfT; LZ.ink=true; }
-  if(tc>lClose.x){ lClose.k=.5; lClose.d=.5; } else if(LZ.pop&&!LZ.pending){ lClose.k=.2; lClose.d=.6; } else { lClose.k=B.k; lClose.d=B.d; }
+  // blink phases: a request (blinkUntil) starts the close; once ≥ .97 of its depth it holds B.h ms, then reopens
+  if(rest) LZ.bp=0;
+  else {
+    if(CK.simT<blinkUntil&&!LZ.bp) LZ.bp=1;
+    if(LZ.bp===1&&lClose.x>=.97*Math.min(1,LZ.halfT)){ LZ.bp=2; LZ.bHold=CK.simT+B.h; }
+    if(LZ.bp===2&&CK.simT>=LZ.bHold){ LZ.bp=0; blinkUntil=Math.min(blinkUntil,CK.simT); LZ.halfT=1.02; }
+  }
+  // v6 review: every swap (pop emotions too) closes fully: the drawn closed lash arc hides the change
+  if(LZ.pending) tc=1.02;
+  else if(CK.simT<LZ.holdUntil) tc=1.02;
+  else if(LZ.bp){ tc=LZ.halfT; LZ.ink=true; }
+  const BD=LAY_BLINK._;
+  if(tc>lClose.x){ lClose.k=LZ.pending?BD.ck:B.ck; lClose.d=LZ.pending?BD.cd:B.cd; } else if(LZ.pop&&!LZ.pending){ lClose.k=.2; lClose.d=.62; } else { lClose.k=B.k; lClose.d=B.d; }
   lClose.t=tc; step(lClose);
-  if(LZ.pending&&lClose.x>=.9){ const id=LZ.pending; LZ.pending=''; laySwap(id); LZ.holdUntil=CK.simT+25; }
-  if(!LZ.pending&&CK.simT>=LZ.holdUntil&&CK.simT>=blinkUntil&&lClose.x<.05) LZ.pop=false;
+  // swap only when the last AND the current 60 Hz state are >= .9 closed, so every frame drawn after it (interpolated
+  // between the two, a in [0,1)) is >= .9 closed too (v5 tested the tick state alone: the drawn frame, one tick behind,
+  // showed the new layers at closure .80-.90). Then hold >= 2 frames closed before the reopen.
+  // v6 review: .9 -> LAY_SWAP_AT (.97): at .9 the first frame of the new emotion still showed its pupils in a 9 % slit
+  if(LZ.pending&&lClose.x>=LAY_SWAP_AT&&lClose.px>=LAY_SWAP_AT){ const id=LZ.pending; LZ.pending=''; laySwap(id); LZ.holdUntil=CK.simT+50; }
+  if(!LZ.pending&&!LZ.bp&&CK.simT>=LZ.holdUntil&&CK.simT>=blinkUntil&&lClose.x<.05){ LZ.pop=false; LZ.sw=false; }
   // gaze darts + holds
   const cl=v=>Math.max(-1,Math.min(1,v));
   if(forced){ snap(lpX,cl(pupX.x/.5)); snap(lpY,cl(pupY.x/.34)); GZ.tx=lpX.x; GZ.ty=lpY.x; GZ.jx=GZ.jy=0; }
@@ -1605,9 +1787,16 @@ function layLife(){
     else if(CK.simT>=GZ.jitAt){ GZ.jx=(Math.random()-.5)*.05; GZ.jy=(Math.random()-.5)*.05; GZ.jitAt=CK.simT+450+Math.random()*650; }
     lpX.t=GZ.tx+GZ.jx; lpY.t=GZ.ty+GZ.jy; step(lpX); step(lpY);
   }
-  // highlight: 0.4 × the (contained) pupil offset of the last frame, on its own springy lag
-  const hk=.4, ht=[LAYS.offL[0]*hk,LAYS.offL[1]*hk,LAYS.offR[0]*hk,LAYS.offR[1]*hk];
+  // highlight: 0.75 × the (contained) pupil offset of the last frame, on its own springy lag (v6 review: .4 left her
+  // highlight rim arc 60 % of a glance behind, drawn across the pupil; now it lags on darts and settles near the pupil)
+  const hk=.75, ht=[LAYS.offL[0]*hk,LAYS.offL[1]*hk,LAYS.offR[0]*hk,LAYS.offR[1]*hk];
   for(let i=0;i<4;i++){ if(rest&&!forced) snap(hlS[i],0); else if(forced) snap(hlS[i],ht[i]); else { hlS[i].t=ht[i]; step(hlS[i]); } }
+  // v6 brows: dip 5 texels + squash 12 % with the lid (their own springs lag it a frame or two), swap dip 9 more, lift 4 on
+  // up-gaze / drop 1.5 on down-gaze; FX (anger marks) pulse on spring kicks
+  { const cb=Math.max(0,Math.min(1,lClose.x)), gyv=lpY.x;
+    const ty=5*cb+(LZ.sw?9*cb:0)-4*Math.max(0,-gyv)+1.5*Math.max(0,gyv), ts=1-.12*cb;
+    for(let e=0;e<2;e++){ if(rest){ snap(bwY[e],0); snap(bwS[e],1); snap(fxS[e],1); } else { bwY[e].t=ty; bwS[e].t=ts; step(bwY[e]); step(bwS[e]); fxS[e].t=1; step(fxS[e]); } }
+    if(!rest&&LAY_FXPULSE.has(LAYS.cur)&&CK.simT>=LZ.fxAt){ fxS[0].v+=.035+.02*Math.random(); fxS[1].v+=.035+.02*Math.random(); LZ.fxAt=CK.simT+650+Math.random()*600; } }
   // motifs (secondary action) + arousal dilation
   MF.pang[0]=MF.ang[0]; MF.pang[1]=MF.ang[1];
   if(rest){ for(let e=0;e<2;e++){ snap(mS[e],1); snap(mR[e],0); MF.ang[e]=MF.pang[e]=0; } snap(dil,1); snap(spinV,0); return; }
@@ -1637,12 +1826,14 @@ function tick(){            // one fixed 60 Hz step of the whole motion model
   breathTick();
   shapeTick();
   // happy eyes: lid comes down with content → the stadium shortens toward (never past) a circle
-  lid.t=CK.simT<blinkUntil?0:1-.5*Math.max(0,Math.min(1,happy.x));
+  // (the Polly layered rig blinks with its own drawn lid: the stadium lid / lidFade must not shut it and fade it out)
+  lid.t=(CK.simT<blinkUntil&&!LAYS.cur)?0:1-.5*Math.max(0,Math.min(1,happy.x));
   step(yaw);step(pitch);step(size);step(lid);
   if(!forced){ pupX.t=yaw.t; pupY.t=pitch.t; step(pupX); step(pupY); }
   pupilLife();
   layLife();
   toonA.t=toonOn?1:0; step(toonA);
+  headK.t=LAYS.cur?LAY_HEAD:1; if(still||forced||(qaMode&&!LAYS.dbg)) snap(headK,headK.t); else step(headK);
   // glass follows the pose from LAG ms ago on a heavier, softer spring (eyes lead)
   if(hLen===HN){h0=(h0+1)%HN;hLen--;}
   const hi=(h0+hLen)%HN; hT[hi]=CK.simT; hY[hi]=yaw.x; hP[hi]=pitch.x; hLen++;
@@ -1690,7 +1881,7 @@ function syncToonProg(){
 function pushUniforms(){
   syncToonProg();
   const a=CK.alpha;
-  const Y=at(yaw,a), P=at(pitch,a), gy=at(gYaw,a), gp=at(gPitch,a), Rl=at(roll,a);
+  const hk=at(headK,a), Y=hk===1?at(yaw,a):at(yaw,a)*hk, P=hk===1?at(pitch,a):at(pitch,a)*hk, gy=at(gYaw,a), gp=at(gPitch,a), Rl=at(roll,a);
   const cy=Math.cos(Y),sy=Math.sin(Y),cp=Math.cos(P),sp=Math.sin(P),cr=Math.cos(Rl),sr=Math.sin(Rl);
   vRot[0]=cy; vRot[1]=sy; vRot[2]=cp; vRot[3]=sp; gl.uniform4fv(U.uRot,vRot);
   vFace[0]=cr; vFace[1]=sr; gl.uniform4fv(U.uFace,vFace);
@@ -1741,6 +1932,16 @@ function pushUniforms(){
       const dl=at(dil,a), sL=dl*at(mS[0],a), sR=dl*at(mS[1],a);
       containLayer(EL,gxL*EL.rx,gy*EL.ry,sL); LAYS.offL[0]=LCO.x; LAYS.offL[1]=LCO.y; LAYS.rawL[0]=gxL*EL.rx; LAYS.rawL[1]=gy*EL.ry;
       containLayer(ER,gxR*ER.rx,gy*ER.ry,sR); LAYS.offR[0]=LCO.x; LAYS.offR[1]=LCO.y; LAYS.rawR[0]=gxR*ER.rx; LAYS.rawR[1]=gy*ER.ry;
+      // far/near balance: each pupil rests on its eye's open inner (nasal) edge, so containment stops the nasal glance almost
+      // at once while the temporal eye travels the full range. Give back part of the blocked nasal travel (≤ LAY_NASAL ×
+      // pupil width); the overhang slides under the open edge and is clipped by the white (Polly's resting pupils are
+      // already cropped there). Exactly 0 at rest and on vertical glances (no deficit), so the QA pose is untouched.
+      LAYS.offL[0]+=Math.max(0,Math.min(LAYS.rawL[0]-LAYS.offL[0],LAY_NASAL*EL.pw*sL));
+      LAYS.offR[0]+=Math.min(0,Math.max(LAYS.rawR[0]-LAYS.offR[0],-LAY_NASAL*ER.pw*sR));
+      // v5.2 balance: the temporal (unblocked) eye travels at most LAY_BAL × the nasal eye's travel (+2 texels), so the
+      // pair glances together instead of one pupil sweeping across while the other barely moves
+      if(LAYS.rawL[0]<0&&LAYS.offL[0]<0) LAYS.offL[0]=Math.max(LAYS.offL[0],-(LAY_BAL*Math.max(0,-LAYS.offR[0])+LAY_TMIN));
+      if(LAYS.rawR[0]>0&&LAYS.offR[0]>0) LAYS.offR[0]=Math.min(LAYS.offR[0],LAY_BAL*Math.max(0,LAYS.offL[0])+LAY_TMIN);
       if(qaMode&&!LAYS.dbg){ LAYS.offL[0]=Math.round(LAYS.offL[0]); LAYS.offL[1]=Math.round(LAYS.offL[1]); LAYS.offR[0]=Math.round(LAYS.offR[0]); LAYS.offR[1]=Math.round(LAYS.offR[1]); }
       // size: the displayed emotion's own open box (not the shape morph / blink lid) × the tap spring
       const e1=EV3[1], e2=EV3[2]; EV3[1]=1; EV3[2]=SHAPE_NAMES.indexOf('polly-'+id); F.eyeShapeV(EYL,EV3); EV3[1]=e1; EV3[2]=e2;
@@ -1759,13 +1960,33 @@ function pushUniforms(){
       if(qaMode&&!LAYS.dbg){ for(let i=0;i<4;i++) vLayH[i]=Math.round(vLayH[i]); }
       gl.uniform4fv(U.uLayH,vLayH);
       // closure: blink / swap spring + lid follow (down → the lid drops ~10%, up → lifts 3%)
-      const cb=Math.max(-.1,Math.min(1,at(lClose,a))), lf=.10*Math.max(0,gy)-.03*Math.max(0,-gy), cc=Math.min(1,cb+lf);
-      const ik=LZ.ink?Math.max(0,Math.min(1,(cb-.75)/.22)):0;
-      LAYS.close=cc; LAYS.ink=ik*ik*(3-2*ik);
-      vLayB[0]=EL.piv; vLayB[1]=ER.piv; vLayB[2]=1-.9*cc; vLayB[3]=LAYS.ink; gl.uniform4fv(U.uLayB,vLayB);
+      // v6: lid closure (drawn lid, glass.frag layLid) + lid follow (down → the lid drops 10 %); a negative closure (the
+      // reopen overshoot / up-gaze) is a small vertical stretch of the eye instead (≤ 8 %)
+      const cb=Math.max(-.12,Math.min(1,at(lClose,a))), lf=.10*Math.max(0,gy)-.03*Math.max(0,-gy), cc=Math.min(1,cb+lf);
+      LAYS.close=cc; LAYS.ink=0;
+      vLayB[0]=Math.max(0,cc); vLayB[1]=Math.max(0,cc); vLayB[2]=1+Math.min(.08,.9*Math.max(0,-cc)); vLayB[3]=LAY_LOWER;
+      if(qaMode&&!LAYS.dbg){ vLayB[0]=vLayB[1]=0; vLayB[2]=1; }
+      gl.uniform4fv(U.uLayB,vLayB);
+      // v6 deco: her brows / FX / nose shade
+      const dm=decoReady&&decoMeta.emotes[id];
+      LAYS.deco=dm?1:0;
+      if(dm&&U.uDeco){
+        gl.uniform1i(U.uDecoTex,2); gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D,decoTex); gl.activeTexture(gl.TEXTURE0);
+        const bsw=LZ.sw?Math.max(0,Math.min(1,at(lClose,a))):0, bu=Math.max(0,Math.min(1,(bsw-.3)/.55)), fa=1-bu*bu*(3-2*bu);
+        vDeco[0]=1; vDeco[1]=dm.row; vDeco[2]=1/decoMeta.W; vDeco[3]=1/decoMeta.H; gl.uniform4fv(U.uDeco,vDeco);
+        vDecoC[0]=decoMeta.dw; vDecoC[1]=decoMeta.dh; vDecoC[2]=decoMeta.ax; vDecoC[3]=decoMeta.ay+dm.subL[1]; gl.uniform4fv(U.uDecoC,vDecoC);
+        vDecoB[0]=at(bwY[0],a); vDecoB[1]=at(bwY[1],a); vDecoB[2]=fa; vDecoB[3]=fa; gl.uniform4fv(U.uDecoB,vDecoB);
+        vDecoF[0]=at(fxS[0],a); vDecoF[1]=at(fxS[1],a); vDecoF[2]=at(bwS[0],a); vDecoF[3]=at(bwS[1],a); gl.uniform4fv(U.uDecoF,vDecoF);
+        const fl=dm.Lfx?dm.Lfx.c:[decoMeta.ax,decoMeta.ay], fr=dm.Rfx?dm.Rfx.c:[decoMeta.ax,decoMeta.ay];
+        vDecoP[0]=fl[0]; vDecoP[1]=fl[1]; vDecoP[2]=fr[0]; vDecoP[3]=fr[1]; gl.uniform4fv(U.uDecoP,vDecoP);
+        vDecoQ[0]=dm.Lbrow?dm.Lbrow.bb[3]:0; vDecoQ[1]=dm.Rbrow?dm.Rbrow.bb[3]:0; vDecoQ[2]=dm.subL[0]; vDecoQ[3]=dm.subR[0]; gl.uniform4fv(U.uDecoQ,vDecoQ);
+        // mid layer: her eye spacing dm.sp (ref px) spread over the rig's spacing 2·lonR (radians)
+        const lr=Math.max(lonR,1e-3); vDecoM[0]=dm.sp/(2*lr); vDecoM[1]=dm.subM[0]; vDecoM[2]=dm.subM[1]; vDecoM[3]=LAY_NOSE; gl.uniform4fv(U.uDecoM,vDecoM);
+        LAYS.reach=(Math.max(dm.reachL,dm.reachR,dm.reachM)+10)/Math.max(LAYS.tpr,1e-4)*RR+2; LAYS.midK=vDecoM[0]/LAYS.tpr;
+      } else if(U.uDeco){ vDeco[0]=0; gl.uniform4fv(U.uDeco,vDeco); LAYS.reach=0; }
       const pxu=(W/Math.max(qaVS.Wc,1))/Math.max(qaVS.k,1e-6);            // device px per face unit
       vLayD[0]=LAYS.tpr/(RR*pxu); vLayD[1]=LAYS.dbg; vLayD[2]=qaMode?LAYS.qaScale:1; vLayD[3]=0; gl.uniform4fv(U.uLayD,vLayD);
-    } else if(U.uLay){ vLay[0]=0; gl.uniform4fv(U.uLay,vLay); }
+    } else if(U.uLay){ vLay[0]=0; gl.uniform4fv(U.uLay,vLay); LAYS.reach=0; if(U.uDeco){ vDeco[0]=0; gl.uniform4fv(U.uDeco,vDeco); } }
   }
   vShapeT[0]=Math.cos(tl); vShapeT[1]=Math.sin(tl); vShapeT[2]=SA.bend+(SB.bend-SA.bend)*mt; vShapeT[3]=lonR; gl.uniform4fv(U.uShapeT,vShapeT);
   const eoy=EYE.oy+(EYEB.oy-EYE.oy)*mt;
@@ -1798,9 +2019,16 @@ function pushUniforms(){
     if(U.uQA) gl.uniform1f(U.uQA, qaMode);
         vMotif[0]=MOTIF.typ; vMotif[1]=MOTIF.mark; vMotif[2]=MOTIF.brow; vMotif[3]=MOTIF.blush; gl.uniform4fv(U.uMotif,vMotif);
     vMotifCol[0]=MOTIF.col[0]; vMotifCol[1]=MOTIF.col[1]; vMotifCol[2]=MOTIF.col[2]; gl.uniform3fv(U.uMotifCol,vMotifCol);
-    vBrow[0]=MOTIF.browP[0]; vBrow[1]=MOTIF.browP[1]; vBrow[2]=MOTIF.browP[2]; vBrow[3]=MOTIF.browP[3]; gl.uniform4fv(U.uBrow,vBrow);
+    // Polly expression swap: the brows squash with the closing eye (dip 20 %, thin to 25 %) and change on the same closed
+    // frame as the eye layers, so the brow swap is hidden in the squash too (ordinary blinks leave the brows alone)
+    const bsq=(LAYS.on&&LZ.sw)?Math.max(0,Math.min(1,at(lClose,a))):0; LAYS.bsq=bsq;
+    vBrow[0]=MOTIF.browP[0]*(1-.2*bsq); vBrow[1]=MOTIF.browP[1]; vBrow[2]=MOTIF.browP[2]*(1-.75*bsq); vBrow[3]=MOTIF.browP[3]; gl.uniform4fv(U.uBrow,vBrow);
+    // v5.2: and fade out completely by .85 closed (v5.1 kept 25 %-thin brows on screen, so their colour / shape change on
+    // the closed frame read as a hard cut); the new brows fade in with the reopen
+    if(bsq>0){ const bu=Math.max(0,Math.min(1,(bsq-.3)/.55)); vMotif[2]=MOTIF.brow*(1-bu*bu*(3-2*bu)); gl.uniform4fv(U.uMotif,vMotif); }
     vBrowCol[0]=MOTIF.browCol[0]; vBrowCol[1]=MOTIF.browCol[1]; vBrowCol[2]=MOTIF.browCol[2]; gl.uniform3fv(U.uBrowCol,vBrowCol);
     if(U.uBrowX){ vBrowX[0]=MOTIF.browX[0]; vBrowX[1]=MOTIF.browX[1]; vBrowX[2]=MOTIF.browX[2]; vBrowX[3]=MOTIF.browX[3]; gl.uniform4fv(U.uBrowX,vBrowX); }
+    if(decoFail&&LAYS.on&&Q.has('nodeco')){ vMotif[1]=0; vMotif[2]=0; gl.uniform4fv(U.uMotif,vMotif); }   // ?nodeco: no stroke brows / marks either
     vPupilA[0]=TO.a; vPupilA[1]=TO.b; vPupilA[2]=1/TO.a; vPupilA[3]=1/TO.b; gl.uniform4fv(U.uPupilA,vPupilA);
   }
   gl.uniform4fv(U.uToon,vToon);
@@ -1821,6 +2049,7 @@ function pushUniforms(){
   vEyeP[2]=efade; vEyeP[3]=(crad+arc*crad)*RR+1+mg;
   if(tr>0){ const reach=(Math.hypot(TO.ox,TO.oy)+TO.grow+Math.hypot(TO.rpo,TO.rpu)+(TO.rs-1)*Math.max(ehw,ehh))*RR+2;   // toon rim pokes out: grow the capsule if needed
     if(reach>mg) vEyeP[3]+=reach-mg; }
+  if(LAYS.on&&LAYS.reach>vEyeP[3]) vEyeP[3]=LAYS.reach;                // v6: her brows sit higher than the stroke brows
   if(U.uQA) gl.uniform1f(U.uQA, qaMode); /*qa-upload*/
   gl.uniform4fv(U.uEyeP,vEyeP);
   PJ[0]=cy; PJ[1]=sy; PJ[2]=cp; PJ[3]=sp; PJ[4]=cr; PJ[5]=sr;
@@ -2035,7 +2264,7 @@ function patchShape(name,fields){
   if(SHAPE_NAMES.indexOf(eyesName)===i){ SH.a=SH.b=i; snap(shapeT,0); }
   return true;
 }
-window.__astrid={drive,trace,snapLid:v=>snap(lid,v),setEyes,setToon,patchShape,setQA:v=>{qaMode=v?1:0;},kick:()=>{pushUniforms(); draw();},atlasReady:()=>eyeAtlasReady&&(layReady||layFail)&&(!qaMode||qaMaskReady),layDbg:v=>{LAYS.dbg=+v||0;},layScale:v=>{LAYS.qaScale=Math.max(1,+v||1);},layers:()=>({ready:layReady,fail:layFail,on:LAYS.on,id:LAYS.id,cur:LAYS.cur,pending:LZ.pending,close:LAYS.close,ink:LAYS.ink,lClose:lClose.x,sL:LAYS.sL,sR:LAYS.sR,rL:LAYS.rL,rR:LAYS.rR,hl:Array.from(vLayH),gaze:[lpX.x,lpY.x],gz:{tx:GZ.tx,ty:GZ.ty,hold:GZ.holdUntil,darts:GZ.darts},blinkUntil,simT:CK.simT,swaps:LZ.log.slice(),brow:MOTIF.browP.slice(),row:LAYS.row,offL:LAYS.offL.slice(),offR:LAYS.offR.slice(),rawL:LAYS.rawL.slice(),rawR:LAYS.rawR.slice(),qaL:LAYS.qaL.slice(),qaR:LAYS.qaR.slice(),tpr:LAYS.tpr,H,W,dpr}),qaBlit:()=>({ready:qaMaskReady,imgs:Object.keys(qaMaskImgs).length,cv:!!qaBlitCv,disp:qaBlitCv&&qaBlitCv.style.display,w:qaBlitCv&&qaBlitCv.width,h:qaBlitCv&&qaBlitCv.height,vs:qaVS,last:qaLastPaint}),
+window.__astrid={drive,trace,blinkNow:nd=>{ if(LAYS.cur){ layBlink(); if(nd) doubleAt=-1; } else blink(); },holdBlinks:v=>{ nextBlink=v?1e12:CK.simT+800; },snapLid:v=>snap(lid,v),setEyes,setToon,patchShape,setQA:v=>{qaMode=v?1:0;},kick:()=>{pushUniforms(); draw();},atlasReady:()=>eyeAtlasReady&&(layReady||layFail)&&(decoReady||decoFail)&&(!qaMode||qaMaskReady),layDbg:v=>{LAYS.dbg=+v||0;},layScale:v=>{LAYS.qaScale=Math.max(1,+v||1);},layers:()=>({midK:LAYS.midK||0,bsq:LAYS.bsq||0,bp:LZ.bp,lid:[vLayB[0],vLayB[2]],deco:LAYS.deco||0,decoB:Array.from(vDecoB),decoF:Array.from(vDecoF),sw:LZ.sw,lClosePx:lClose.px,ready:layReady,fail:layFail,on:LAYS.on,id:LAYS.id,cur:LAYS.cur,pending:LZ.pending,close:LAYS.close,ink:LAYS.ink,lClose:lClose.x,sL:LAYS.sL,sR:LAYS.sR,rL:LAYS.rL,rR:LAYS.rR,hl:Array.from(vLayH),gaze:[lpX.x,lpY.x],gz:{tx:GZ.tx,ty:GZ.ty,hold:GZ.holdUntil,darts:GZ.darts},blinkUntil,simT:CK.simT,swaps:LZ.log.slice(),brow:MOTIF.browP.slice(),row:LAYS.row,offL:LAYS.offL.slice(),offR:LAYS.offR.slice(),rawL:LAYS.rawL.slice(),rawR:LAYS.rawR.slice(),qaL:LAYS.qaL.slice(),qaR:LAYS.qaR.slice(),tpr:LAYS.tpr,H,W,dpr}),qaBlit:()=>({ready:qaMaskReady,imgs:Object.keys(qaMaskImgs).length,cv:!!qaBlitCv,disp:qaBlitCv&&qaBlitCv.style.display,w:qaBlitCv&&qaBlitCv.width,h:qaBlitCv&&qaBlitCv.height,vs:qaVS,last:qaLastPaint}),
 qaBlitTest:()=>{
   ensureQABlit();
   const Ls=[90,120,35,35], Rs=[150,120,35,35];

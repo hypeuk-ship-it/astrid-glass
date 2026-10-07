@@ -70,7 +70,16 @@ uniform vec4  uLayQ;   // QA 1:1 blit: L cell origin xy, R cell origin zw (devic
 uniform vec4  uLayML;  // L pupil sprite: centre xy (cell texels), inverse rotation·scale (cos θ / s, sin θ / s) zw
 uniform vec4  uLayMR;  // R pupil sprite: same
 uniform vec4  uLayH;   // highlight offset relative to the pupil (texels, y down): L xy, R zw
-uniform vec4  uLayB;   // closure (lid/blink): L pivot y, R pivot y (cell texels), vertical scale, ink fill 0..1
+uniform vec4  uLayB;   // v6 lids: L lid closure 0..1, R lid closure, open-overshoot vertical stretch (>= 1), lower-lid share of the closure
+// v6 Polly brows / FX / nose shade (polly-deco-atlas.png, tools/build_polly_deco.py): per emote row L brow, L fx, R brow, R fx, mid fx, mid shade
+uniform sampler2D uDecoTex;
+uniform vec4  uDeco;   // x = on, y = row, z = 1/atlas W, w = 1/atlas H
+uniform vec4  uDecoC;  // cell w, cell h, eye anchor in the cell (x, y)
+uniform vec4  uDecoB;  // brow dy L, brow dy R (texels, + down), brow alpha, fx alpha
+uniform vec4  uDecoF;  // fx pulse scale L, R; brow squash (vertical scale) L, R
+uniform vec4  uDecoP;  // fx pulse centre L (x, y), R (x, y) (deco texels)
+uniform vec4  uDecoQ;  // brow squash pivot y L, R (deco texels: the brow's lower edge), sub-texel anchor x L, R
+uniform vec4  uDecoM;  // mid layer: texels per radian of lon (stretch to the rig's eye spacing), sub-texel anchor x, y, nose-shade strength (v6 review: 0)
 uniform vec4  uLayD;   // x = texels per device px at Z = 1 (live), y = debug codes, z = QA scale (1 = 1:1 exact), w unused
 uniform vec4  uShadow;  // eye drop shadow: strength, lat offset down (rad), gauss k (exp2), -
 uniform vec4  uShapeC;  // eye lid (radians): egg-centre offset, lid line (rel. to centre), corner k, -
@@ -127,9 +136,12 @@ float atlasStamp(vec2 p, vec4 stamp, float side){
 }
 
 // ---- Polly layered sprites (back -> front): white body, coloured pupil/motif, pupil-core ink, highlight (the three
-// moving layers are clipped to the white), closure (lid/blink), outline ink (unclipped, on top). Atlas: 5 cells per
-// eye (white, pupil, core, highlight, outline, fringe) x L/R; RGB = reference colours, A = signed distance field
+// moving layers are clipped to the white), LID (v6: her upper lash slides down over the eye, below), outline ink (on top).
+// Atlas: 10 cells per eye (white, pupil, core, highlight, outline, fringe, nat, lidprof, lash, lidprof2) x L/R; RGB = reference colours, A = signed distance field
 // (texels, a = .5 + d / (2 * LAY_R)); the fringe cell is straight alpha (the pupil's own anti-aliasing, unmixed). Coverage = SDF edge at the current texel/px scale, so edges stay crisp at any size;
+// v5.1: the white's coverage is the exact rest body while the pupil is home and the NATURAL white contour (nat cell: the
+// open eye edge bridged across where the rest pupil sat, pupil bulges trimmed) once it has moved > ~1-3.5 texels, so a dart
+// never leaves a pupil-shaped bite in the white. The white RGB is defined on both (one clean two-tone field).
 // at the exact 1:1 QA pose (hard = 1) it is a step at .5 at texel centres = the reference masks bit for bit.
 // No derivatives / extensions (Metal-portable): the px scale comes in as a uniform.
 const float LAY_R = 4.0;
@@ -141,25 +153,62 @@ vec4 layTex(float col, vec2 t){
 float layCov(float a, float s, float hard){
   return hard > 0.5 ? step(0.5, a) : clamp((a - 0.5) * (2.0 * LAY_R) / s + 0.5, 0.0, 1.0);
 }
-// closure: the whole eye stack squashes about the lower-lid pivot (blink / lid follow); sprites have no lid art
+// v6: the open overshoot of a blink is a small vertical stretch of the whole eye about its anchor (z >= 1; 1 = none).
+// The blink itself is the LID below (no squash any more: v5 squashed the whole stack and filled it with ink).
 vec2 layClose(vec2 t, float piv){ t.y = piv + (t.y - piv) / max(uLayB.z, 0.03); return t; }
+const float LAY_NC = 10.0;
+const float LAY_OV = 4.0;                                // texels
+// v6 LID (Polly's lid language: the thick upper lash line IS the lid edge; the lavender band under it is the lid shadow).
+// Per column (lidprof cell): top / bottom of the opening and the top of the upper lash (texels). Closure cl slides the lash
+// down column-wise by dd = cl * (1 - k) * H and the lower lash line up by ee = cl * k * H, so at cl = 1 the lash lands on the
+// lower line: her lash stroke, bent to the lower lid's curve = the drawn closed eye (thick ink arc). Returns the opening's
+// coverage at t (whites / pupils are clipped to it); dd, ee, lt (moved lash top) out.
+float layLid(vec2 t, float c0, float cl, float s, out float dd, out float ee, out float lt, out float ly){
+  vec2 tc = vec2(t.x, 0.5 * uLayC.y);
+  vec3 pr = layTex(c0 + 7.0, tc).rgb * uLayC.y;                    // top, bottom of the opening, clip top (column's top ink)
+  vec2 pq = layTex(c0 + 9.0, tc).rg;                               // lash top / CH, her lash thickness / 64
+  float hh = max(pr.y - pr.x, 0.0);
+  // + LAY_OV: the two lash lines overlap a little when shut, so the closed eye is ONE ink arc (no sliver between them)
+  float hc = cl * (hh + LAY_OV * smoothstep(0.6, 1.0, cl));
+  dd = (1.0 - uLayB.w) * hc; ee = uLayB.w * hc; lt = pr.z + dd;
+  // the lash rides down with its lower edge on the lid line; a steep (tall) lash run is squashed toward her lash thickness
+  // as it shuts, so the closed frame is an even arc and the eye's sides shorten instead of riding down as spikes
+  float run = max(pr.x - pq.x * uLayC.y, 0.5), th = max(mix(run, min(run, pq.y * 64.0 * 1.1), cl), 0.5);
+  ly = pr.x - (pr.x + dd - t.y) * run / th;
+  return clamp((t.y - pr.x - dd) / s + 0.5, 0.0, 1.0) * clamp((pr.y - ee - t.y) / s + 0.5, 0.0, 1.0);
+}
+// rest body -> natural white contour as the pupil leaves home (0 at rest and under the +-0.5 texel idle jitter)
+float layNatK(vec4 E){ return smoothstep(1.0, 3.5, length(E.zw)); }
 // pupil-sprite coords: gaze offset po, rotation/scale M about the pupil centre
 vec2 layPup(vec2 t, vec2 po, vec4 M){ vec2 v = t - po - M.xy; return M.xy + vec2(M.z * v.x + M.w * v.y, -M.w * v.x + M.z * v.y); }
-// one eye at cell coords t (closure applied by the caller) -> interior colour (white + moving layers + closure ink);
-// ab = body coverage, ao / oc = outline coverage / colour, mv = visible moving-layer coverage (after the clip to the
+// one eye at cell coords t (stretch applied by the caller) -> interior colour (white + moving layers, clipped to the lid
+// opening); ab = body coverage, ao / oc = outline coverage / colour, mv = visible moving-layer coverage (after the clip to the
 // white and under the outline), mp = moving coverage before the clip (debug / QA leak check)
-vec3 layEye(vec2 t, vec4 E, vec4 M, vec2 rel, float c0, float s, float hard, out float ab, out float ao, out vec3 oc, out float mv, out float mp){
+vec3 layEye(vec2 t, vec4 E, vec4 M, vec2 rel, float c0, float s, float hard, float cl, out float ab, out float ao, out vec3 oc, out float mv, out float mp){
+  float dd = 0.0, ee = 0.0, lt = 0.0, ly = 0.0, lw = 1.0;
+  bool lid = cl > 1e-4;                                              // rest / QA: exactly the v5 path
+  if (lid) lw = layLid(t, c0, cl, s, dd, ee, lt, ly);
   vec4 wb = layTex(c0, t);
-  ab = layCov(wb.a, s, hard);
-  vec3 col = wb.rgb;
+  ab = mix(layCov(wb.a, s, hard), layCov(layTex(c0 + 6.0, t).a, s, hard), layNatK(E)) * lw;
+  vec3 col = lid ? layTex(c0, vec2(t.x, t.y - dd)).rgb : wb.rgb;     // the lavender lid shadow rides down with the lash
   vec2 tp = layPup(t, E.zw, M);
-  vec4 fr = layTex(c0 + 5.0, tp); col = mix(col, fr.rgb, fr.a);     // pupil AA fringe (moves with the pupil)
+  // pupil AA fringe (moves with the pupil). v6 review: on the live path its baked (near-white) colour is tinted by the sclera
+  // it now sits on, so a pupil on the lavender band has no white halo; the 1:1 QA pose (hard) keeps the exact colour
+  vec4 fr = layTex(c0 + 5.0, tp); col = mix(col, hard > 0.5 ? fr.rgb : fr.rgb * min(col * (1.0 / 0.96), vec3(1.0)), fr.a);
   vec4 pp = layTex(c0 + 1.0, tp); float ap = layCov(pp.a, s, hard); col = mix(col, pp.rgb, ap);
   vec4 kc = layTex(c0 + 2.0, tp); float ak = layCov(kc.a, s, hard); col = mix(col, kc.rgb, ak);
   vec4 hh = layTex(c0 + 3.0, layPup(t - rel, E.zw, M)); float ah = layCov(hh.a, s, hard) * ap;   // clipped to the pupil
   col = mix(col, hh.rgb, ah);
-  col = mix(col, LAY_INK, uLayB.w);                                  // closed frame: the squashed eye reads as ink
-  vec4 ol = layTex(c0 + 4.0, t); ao = layCov(ol.a, s, hard); oc = ol.rgb;
+  if (!lid) { vec4 ol = layTex(c0 + 4.0, t); ao = layCov(ol.a, s, hard); oc = ol.rgb; }
+  else {
+    // lower lash line (outline minus the upper lash) rides up by ee; anything of it above the moved lash is gone (the
+    // opening is smaller now); the upper lash rides down by dd
+    vec2 ts = vec2(t.x, t.y + ee);
+    vec4 ol = layTex(c0 + 4.0, ts);
+    float aS = layCov(ol.a, s, hard) * (1.0 - layCov(layTex(c0 + 8.0, ts).a, s, hard)) * clamp((t.y - lt) / s + 0.5, 0.0, 1.0);
+    vec4 ls = layTex(c0 + 8.0, vec2(t.x, ly)); float aL = layCov(ls.a, s, hard);
+    ao = max(aS, aL); oc = aL >= aS ? ls.rgb : ol.rgb;
+  }
   mp = max(max(ap, ak), ah); mv = mp * ab * (1.0 - ao);
   return col;
 }
@@ -173,13 +222,13 @@ vec3 layQA(vec3 col){
     vec4 E = i == 0 ? uLayL : uLayR;
     vec4 M = i == 0 ? uLayML : uLayMR;
     vec2 rel = i == 0 ? uLayH.xy : uLayH.zw;
-    float piv = i == 0 ? uLayB.x : uLayB.y;
-    float c0 = i == 0 ? 0.0 : 6.0;
+    float cl = i == 0 ? uLayB.x : uLayB.y;
+    float c0 = i == 0 ? 0.0 : LAY_NC;
     vec2 t = hard > 0.5 ? floor(fp - o) + 0.5 : (fp - o) / k;
     if (t.x < 0.0 || t.y < 0.0 || t.x > uLayC.x || t.y > uLayC.y) continue;
-    t = layClose(t, piv);
+    t = layClose(t, E.y);
     float ab, ao, mv, mp; vec3 oc;
-    vec3 ci = layEye(t, E, M, rel, c0, 1.0 / k, hard, ab, ao, oc, mv, mp);
+    vec3 ci = layEye(t, E, M, rel, c0, 1.0 / k, hard, cl, ab, ao, oc, mv, mp);
     col = mix(mix(col, ci, ab), oc, ao);
     dbg = max(dbg, uLayD.y > 1.5 ? vec3(ab, mv, ao) : vec3(ab, mv, mp * (1.0 - ao)));   // 1: leak codes, 2: outline
   }
@@ -363,26 +412,88 @@ float sdAngerMark(vec2 p, float side, vec2 b, float n){
 // eye shading for one chroma tap, given its sphere coordinates (lon, lat) and visible-hemisphere Z
 // Polly layered sprites (live path): cell texel coords of a sphere point (same eye-local u, v as eyeTap), closure
 // applied; c0 = the eye's first atlas column
-vec2 layT(float lon, float lat, out float c0, out vec4 E, out vec4 M, out vec2 rel){
-  float side = lon < 0.0 ? -1.0 : 1.0;
+// eye-local sphere point -> texels relative to that eye's anchor (no stretch); shared by the eye layers and the deco
+vec2 layRel(float lon, float lat, float side){
   float u = lon - uShapeT.w * side;
   float v = lat - uEyeK2.z + uEyeK2.w * u * u;
-  c0 = side > 0.0 ? 6.0 : 0.0; E = side > 0.0 ? uLayR : uLayL; M = side > 0.0 ? uLayMR : uLayML;
+  return vec2(u, -(v - uShapeC.x)) * uLayC.z;
+}
+vec2 layT(float lon, float lat, out float c0, out vec4 E, out vec4 M, out vec2 rel){
+  float side = lon < 0.0 ? -1.0 : 1.0;
+  c0 = side > 0.0 ? LAY_NC : 0.0; E = side > 0.0 ? uLayR : uLayL; M = side > 0.0 ? uLayMR : uLayML;
   rel = side > 0.0 ? uLayH.zw : uLayH.xy;
-  return layClose(E.xy + vec2(u, -(v - uShapeC.x)) * uLayC.z, side > 0.0 ? uLayB.y : uLayB.x);
+  return layClose(E.xy + layRel(lon, lat, side), E.y);
 }
 float layBodyA(float lon, float lat, float s){ float c0; vec4 E, M; vec2 rel; vec2 t = layT(lon, lat, c0, E, M, rel);
-  return layCov(layTex(c0, t).a, s, 0.0); }
+  float cl = c0 > 0.5 ? uLayB.y : uLayB.x, dd, ee, lt, ly, lw = cl > 1e-4 ? layLid(t, c0, cl, s, dd, ee, lt, ly) : 1.0;
+  return lw * mix(layCov(layTex(c0, t).a, s, 0.0), layCov(layTex(c0 + 6.0, t).a, s, 0.0), layNatK(E)); }
+// v6 deco: Polly's own brows, FX (anger marks, blush, tears) and nose shade, straight alpha, in eye-anchor texels.
+// Both eyes' cells are sampled everywhere (each holds only its half of the face), so nothing seams at the midline.
+vec4 decoTex(float col, vec2 d){
+  if (d.x < 0.0 || d.y < 0.0 || d.x > uDecoC.x || d.y > uDecoC.y) return vec4(0.0);
+  vec2 c = clamp(d, vec2(0.5), uDecoC.xy - 0.5);
+  return texture2D(uDecoTex, (vec2(col * uDecoC.x, uDeco.y * uDecoC.y) + c) * uDeco.zw);
+}
+// back (under the eyes, as on her sheet): the MID layer (midline-crossing blush smudge + nose shade, centred on the face
+// midline and stretched sideways to the rig's eye spacing: uDecoM.x = texels per radian of lon) and each eye's FX.
+// v6 review: everything here is masked by the OPEN eye's footprint (rest white | natural white | outline, no lid), so art
+// her sheet keeps hidden under the eyes stays hidden when the lid closes (v6 showed the nose shade / blush band as a grey
+// or brown slab on every shut frame). The nose shade itself is off on the live path (uDecoM.w = 0: on the glass it read
+// as a dark grey rectangle between the eyes).
+float layFoot(float lon, float lat, float s){
+  float c0; vec4 E, M; vec2 rel; vec2 t = layT(lon, lat, c0, E, M, rel);
+  float fw = max(layCov(layTex(c0, t).a, s, 0.0), layCov(layTex(c0 + 6.0, t).a, s, 0.0));
+  return max(fw, layCov(layTex(c0 + 4.0, t).a, s, 0.0));
+}
+vec3 layDecoBack(vec3 col, float lon, float lat, float vis, float Z){
+  vis *= 1.0 - layFoot(lon, lat, uLayD.x / (0.5 * Z + 0.5));
+  vec2 dm = vec2(lon * uDecoM.x, -(lat - uEyeK2.z + uEyeK2.w * lon * lon - uShapeC.x) * uLayC.z) + uDecoC.zw + uDecoM.yz;
+  vec4 sh = decoTex(5.0, dm); col *= mix(vec3(1.0), sh.rgb, sh.a * vis * uDecoB.w * uDecoM.w);   // nose shade: multiply
+  vec4 mf = decoTex(4.0, dm); col = mix(col, mf.rgb, mf.a * vis * uDecoB.w);
+  for (int i = 0; i < 2; i++) {
+    float side = i == 0 ? -1.0 : 1.0, c0 = i == 0 ? 0.0 : 2.0;
+    vec2 d = layRel(lon, lat, side) + uDecoC.zw + vec2(i == 0 ? uDecoQ.z : uDecoQ.w, 0.0);
+    float fs = i == 0 ? uDecoF.x : uDecoF.y;                         // fx pulse about its own centre
+    vec2 fc = i == 0 ? uDecoP.xy : uDecoP.zw;
+    vec4 fx = decoTex(c0 + 1.0, fc + (d - fc) / max(fs, 0.2));
+    col = mix(col, fx.rgb, fx.a * vis * uDecoB.w);
+  }
+  return col;
+}
+// front: her brows (own offset + squash toward the brow's base, on springs)
+vec3 layDeco(vec3 col, float lon, float lat, float vis){
+  for (int i = 0; i < 2; i++) {
+    float side = i == 0 ? -1.0 : 1.0, c0 = i == 0 ? 0.0 : 2.0;
+    vec2 d = layRel(lon, lat, side) + uDecoC.zw + vec2(i == 0 ? uDecoQ.z : uDecoQ.w, 0.0);
+    float by = i == 0 ? uDecoB.x : uDecoB.y, bs = i == 0 ? uDecoF.z : uDecoF.w, bq = i == 0 ? uDecoQ.x : uDecoQ.y;
+    vec2 db = d - vec2(0.0, by);
+    db.y = bq + (db.y - bq) / max(bs, 0.2);
+    vec4 br = decoTex(c0, db);
+    col = mix(col, br.rgb, br.a * vis * uDecoB.z);
+  }
+  return col;
+}
+// Polly glass RGB split on the eye edge: a fraction of the shared chroma offset (subtle glass, clean shapes); the classic
+// shapes keep the full split (their path does not come here)
+// v5.2: 0.12 (v5 1.0, v5.1 0.3). Past the centre tap's body edge the side-tap channel shows the WHITE colour only, so
+// no pupil / motif colour can ever be drawn outside the white (v5.1 mixed the full sprite colour into R / B).
+const float LAY_CHROMA = 0.12;
 // sprite colours on the sphere: the whole stack comes from the centre tap (all three channels); only the body's own
 // edge keeps the glass RGB split (the side taps' body coverage), so sprite detail never gets colour fringes.
 vec3 layEyes(vec3 col, float lon, float lat, float Z, vec3 dl){
   float c0; vec4 E, M; vec2 rel; vec2 t = layT(lon, lat, c0, E, M, rel);
   float vl = uEyeP.z * smoothstep(0.02, 0.08, Z);
-  float s = uLayD.x / ((0.5 * Z + 0.5) * max(min(uLayB.z, 1.0), 0.03));   // texels per px (foreshortened, squashed)
+  // texels per px (foreshortened; squashed: geometric mean of the x (1) and y (1 / squash) footprints, capped). v5 used the
+  // full 1 / squash: near shut the AA ramp grew past the +-4 texel SDF range and the whole eye capsule took ~50 % ink
+  // (two dark discs on every blink / swap frame).
+  float s = uLayD.x / (0.5 * Z + 0.5);
   float ab, ao, mv, mp; vec3 oc;
-  vec3 ci = layEye(t, E, M, rel, c0, s, 0.0, ab, ao, oc, mv, mp);
-  float aR = layBodyA(lon + dl.x, lat + dl.y, s), aB = layBodyA(lon - dl.x, lat - dl.y, s);
-  vec3 c = vec3(mix(col.r, ci.r, aR), mix(col.g, ci.g, ab), mix(col.b, ci.b, aB));
+  vec3 ci = layEye(t, E, M, rel, c0, s, 0.0, c0 > 0.5 ? uLayB.y : uLayB.x, ab, ao, oc, mv, mp);
+  vec2 dq = dl.xy * LAY_CHROMA;
+  float aR = layBodyA(lon + dq.x, lat + dq.y, s), aB = layBodyA(lon - dq.x, lat - dq.y, s);
+  vec3 cw = layTex(c0, t).rgb;                                       // white colour (for the side taps past the edge)
+  float kR = aR > ab ? ab / max(aR, 1e-4) : 1.0, kB = aB > ab ? ab / max(aB, 1e-4) : 1.0;
+  vec3 c = vec3(mix(col.r, mix(cw.r, ci.r, kR), aR), mix(col.g, ci.g, ab), mix(col.b, mix(cw.b, ci.b, kB), aB));
   c = mix(c, oc, ao);
   return mix(col, c, vl);
 }
@@ -515,9 +626,12 @@ vec3 eyes(vec3 col, vec2 p, vec2 off){
   float rimA = 0.0;                                            // ≥ 0 on the centre tap, ≤ 0 on the side taps
   if (uQA < 0.5 && uToon.x > 0.0) { rimA = eyeRim(lon, lat, Z); col = mix(col, uToonCol, rimA); }
   // Polly layers first, then brows (stroke) and FX (anger marks, blush) on top of them (layer order)
+  if (uLay.x > 0.5 && uDeco.x > 0.5) col = layDecoBack(col, lon, lat, uEyeP.z * smoothstep(0.02, 0.08, Z), Z);
   if (uLay.x > 0.5) col = layEyes(col, lon, lat, Z, dl);
+  // v6: Polly's own brows / FX / nose shade (sprites from her sheet) replace the stroke brows + anger marks on that path
+  if (uLay.x > 0.5 && uDeco.x > 0.5) col = layDeco(col, lon, lat, uEyeP.z * smoothstep(0.02, 0.08, Z));
   // emote stroke brows (arched tapered capsules + dark outline) + anger marks + soft blush
-  if (uQA < 0.5 && uMotif.z > 0.0) {
+  else if (uQA < 0.5 && uMotif.z > 0.0) {
     float side = lon < 0.0 ? -1.0 : 1.0;
     float u = lon - uShapeT.w * side;
     float v = lat - uEyeK2.z + uEyeK2.w * u * u;
@@ -536,7 +650,7 @@ vec3 eyes(vec3 col, vec2 p, vec2 off){
       col = mix(col, uMotifCol, mv * 0.95);
     }
   }
-  if (uQA < 0.5 && uMotif.w > 0.0) {
+  if (uQA < 0.5 && uMotif.w > 0.0 && uLay.x < 0.5) {   // not on the Polly layer path (v5.2: it drew a thin ring there)
     // blush: soft ellipses just below/outside each eye (love / blush poses)
     float side = lon < 0.0 ? -1.0 : 1.0;
     float u = lon - uShapeT.w * side + side * uEyeA.x * .55;

@@ -11,8 +11,8 @@ from skimage.measure import euler_number
 rt = json.load(open(os.path.join(ROOT, 'polly-layer-atlas.json'))); meta = json.load(open(os.path.join(ROOT, 'emotes/polly-layers/meta.json')))
 A = np.asarray(Image.open(os.path.join(ROOT, 'polly-layer-atlas.png')).convert('RGBA'))[..., 3].astype(float) / 255
 CW, CH = rt['cw'], rt['ch']; K8 = np.ones((3, 3), bool)
-CELLS = dict(white=0, pupil=1, core=2, outline=4)            # body cell is the clip/white layer (body mask)
-MASK = dict(white='body', pupil=None, core='core', outline='outline')
+CELLS = dict(white=0, pupil=1, core=2, outline=4, nat=6)            # body cell is the clip/white layer (body mask)
+MASK = dict(white='body', pupil=None, core='core', outline='outline', nat='nat')
 def bnd(m): return m & ~ndi.binary_erosion(m, K8, border_value=0)
 def bd(a, b):
   A_, B_ = bnd(a), bnd(b)
@@ -27,14 +27,14 @@ def main(outp):
     for s, side in enumerate('LR'):
       bx = meta['eyes'][e][side]['bbox']; w, h = bx[2] - bx[0], bx[3] - bx[1]; ox, oy = (CW - w) // 2, (CH - h) // 2
       for L, col in CELLS.items():
-        cell = A[row * CH:(row + 1) * CH, (s * 6 + col) * CW:(s * 6 + col + 1) * CW]
+        NC = rt.get('ncell', 6); cell = A[row * CH:(row + 1) * CH, (s * NC + col) * CW:(s * NC + col + 1) * CW]
         ref = (cell >= .5)                                     # k = 1 decode at texel centres
         if MASK[L]:
           m = np.zeros((CH, CW), bool); m[oy:oy + h, ox:ox + w] = np.asarray(Image.open(os.path.join(ROOT, f'emotes/polly-layers/masks/{e}-{side}-{MASK[L]}.png'))) > 127
           if L == 'white': m |= ref & ~m & False
         else: m = ref
         if not m.any(): continue
-        rec = dict(exact_k1=bool((ref == m).all()) if MASK[L] and L != 'white' else bool(True))
+        rec = dict(exact_k1=bool((ref == m).all()) if MASK[L] and L not in ('white', 'nat') else bool(True))
         for k in (2, 3, 4):
           yy, xx = np.mgrid[0:CH * k, 0:CW * k]
           ty, tx = (yy + .5) / k - .5, (xx + .5) / k - .5
