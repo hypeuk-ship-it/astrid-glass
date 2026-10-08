@@ -1,0 +1,1094 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#08090c">
+<meta name="description" content="Astrid, a frosted-glass orb with toon eyes. WebGL.">
+<title>Astrid · solo</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Ccircle cx=%278%27 cy=%278%27 r=%277%27 fill=%27%23c5ccd6%27/%3E%3C/svg%3E">
+<style>
+  :root{--paper:#08090c;--ink:#8e949d}
+  html,body{margin:0;height:100%;background:var(--paper);overflow:hidden}
+  body{display:grid;place-items:center;font:500 12px/1 -apple-system,"Instrument Sans",system-ui,sans-serif;color:var(--ink)}
+  #gl{position:fixed;left:0;top:0;width:0;height:0;display:block;touch-action:none}   /* sized to the orb in JS */
+  .stage{position:relative;width:min(84vmin,620px);aspect-ratio:1;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:none;border-radius:50%;outline:none}
+  .stage:focus-visible{box-shadow:0 0 0 2px var(--ink)}
+  .stage{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+  html,body{overscroll-behavior:none}
+  .coats{position:fixed;left:0;right:0;bottom:22px;display:flex;justify-content:center;gap:10px;align-items:center}
+  #dbg label.chk{grid-template-columns:1fr auto}
+  #dbg label.chk input{grid-column:auto;width:auto;height:auto}
+  .coats .snd{border:1px solid;cursor:pointer;outline-offset:3px;width:auto;height:22px;border-radius:11px;padding:0 10px;background:transparent;color:var(--ink);font:inherit;border-color:currentColor;opacity:.7}
+  /* debug panel (?debug or press d) */
+  #dbg{position:fixed;top:12px;right:12px;width:236px;padding:10px 12px 12px;border-radius:12px;background:rgba(18,20,28,.82);color:#e8ecf4;
+       font:500 11px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);display:none;z-index:5;box-shadow:0 6px 24px rgba(0,0,0,.25);max-height:calc(100vh - 24px);overflow-y:auto;overscroll-behavior:contain}
+  #dbg.on{display:block}
+  #dbg h4{margin:0 0 8px;font-size:11px;display:flex;justify-content:space-between;letter-spacing:.04em}
+  #dbg h4 b{color:#8fe3ff;font-weight:600}
+  #dbg label{display:grid;grid-template-columns:1fr 44px;gap:2px 6px;margin:5px 0}
+  #dbg label span:last-of-type{text-align:right;color:#c4a6ff}
+  #dbg input{grid-column:1 / 3;width:100%;margin:0;accent-color:#ff9fe0;height:14px}
+  #dbg .row{display:flex;gap:6px;margin-top:9px}
+  #dbg button{flex:1;font:inherit;color:#e8ecf4;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.18);border-radius:7px;padding:5px 0;cursor:pointer}
+  #dbg button:hover{background:rgba(255,255,255,.18)}
+</style>
+</head>
+<body>
+<canvas id="gl" aria-hidden="true"></canvas>
+<div class="stage" id="astrid" role="button" tabindex="0" aria-label="Astrid. Tap to poke."></div>
+<div class="coats" id="bar"></div>
+<div id="dbg"></div>
+
+<!-- Glass shader: inlined copy of glass.frag (run `python3 build.py` after editing glass.frag). -->
+<script type="x-shader/x-fragment" id="glass-frag">
+// Astrid glass · "vibe" (v8), solo build: carbon coat + the Toon eye. One draw call over a canvas sized to the
+// orb + bloom. GLSL ES 1.00 (WebGL1/2). Units: AstridFace 240-space. Orb r118 at (120,120); stage framing -50..290.
+// Look: a frosted form that bleeds into the paper with a Gaussian edge (no outline, no glint), a luminous pool
+// glowing up from the BOTTOM and fading to haze at the top, a faint pink/cyan prism smear only along the soft lower
+// boundary, and two Toon eyes (the drawing tutorial's eye: upright ellipse, lower half squashed up by a fixed
+// lattice, a dark rim crescent peeking out behind it, tall dark pupils) with a slight RGB split.
+// Layering (bottom → top):
+//   frost(p)  : paper · bloom into the page · frosted body (Gaussian edge)                [fixed]
+//   pool(p)   : drifting blob field (pool, deep floor, bloom) moved by the delayed, inverted head turn,
+//               noise warp and random-target drift; inset so a frosted margin stays around it
+//   haze      : veil, heavier toward the top                                              [fixed]
+//   fringe    : pink outside / cyan inside where the pool meets the frosted margin, strongest low
+//   eyes      : drop shadow · rim crescent · soft glow + fill sampled 3× (R/G/B) → gentle chromatic edge · pupils
+//   petting   : body squash/stretch (whole frame), contact lens dent + soft brightening under the finger
+// Efficiency: the noise warp and the body transform run per vertex of a coarse grid (glass.vert);
+// everything that is constant across the frame is computed on the CPU (blob transforms with
+// their radii folded in, head-turn map, eye box, every slider-derived width/edge, derived
+// colours); gaussians are exp2 with a precomputed −log2(e)/w² factor; pixels past the bloom early-out to
+// paper (+ a sin-free dither hash); the eye SDF runs only inside a tight capsule per eye (CPU-projected
+// axis + glow margin) and does ONE sphere inversion per pixel: the R/B chroma taps reuse it through the
+// analytic Jacobian of (lon, lat) instead of two more inversions.
+// The page background is the same paper colour, so the canvas itself only covers the orb + bloom.
+// Port note (Metal): uniforms map 1:1 to a constant buffer; plain functions; no textures.
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+
+varying vec2  vP;       // body-space position (units), from the vertex grid (affine → exact per pixel)
+varying vec2  vWarp;    // pool noise warp (units), evaluated per grid vertex (smooth 30–60u features)
+uniform vec3  uPaper, uCore, uDeep, uMid, uEdge, uHalo, uEye, uEyeHi, uEyeLo, uGlow;
+uniform vec3  uBloomCol, uLiftCol, uTouchCol;  // per coat: mix(mid,edge,.35) · mix(mid,CYAN,.45) · mix(halo,glow,dark)
+uniform vec4  uAura;    // rgb: mix(core,mid,.3), a: 0.42·(1 − 0.4·dark)
+uniform vec2  uMode;    // x: unused, y: dark (0/1)
+uniform vec4  uRot;     // eyes: cos yaw, sin yaw, cos pitch, sin pitch
+uniform vec4  uEyeP;    // eyes: -, -, lidFade (morph-blended), capsule radius (units)
+uniform vec4  uEyeA;    // eye box (radians): half width, half visible height, 1/hw, 1/hh
+uniform vec4  uShapeC;  // eye (radians): centre offset (happy squint), blink lid line (rel. to centre), lid corner k, rest lon (±)
+uniform vec4  uAsym;    // 3/4 asymmetry: width scale ±(1 + side·x), height offset (side·y); expression-lid height z, -
+uniform vec4  uCutN;    // expression-lid line normal: left eye (xy), right eye (zw)
+uniform vec4  uLat;     // fixed lattice warp: 1/k of the bottom row inner, mid, outer; 1/(1.4·hw)
+uniform vec4  uToon;    // toon layer: rim alpha (0 = off → skipped), pupil alpha (0 = off), -, -
+uniform vec4  uRimP;    // rim after the shared warp: outward, up (rad), scale, -
+uniform vec4  uPupil;   // pupil centre (rad, eye-local): inward rest, gaze u, v; SDF scale of the dart stretch
+uniform mat2  uPupilM;  // pupil dart stretch: eye-local → pupil frame (identity at rest)
+uniform vec4  uPupilA;  // pupil semi-axes a, b and 1/a, 1/b (rad)
+uniform vec4  uPupilC;  // per-eye pupil centre offsets from the soft containment (face.js containPupil): L xy, R zw
+uniform vec3  uToonCol; // toon ink (rim + pupils): the coat's dark tone
+uniform vec4  uShadow;  // eye drop shadow: strength, lat offset down (rad), gauss k (exp2), -
+uniform vec4  uEyeL, uEyeR; // eyes: tight bounding capsules = projected stadium axis ends (a.xy, b.xy), screen units
+uniform vec4  uEyeK;    // eyes: soft edge w, glow k, aura k (exp2 factors), 1/hw
+uniform vec4  uEyeK2;   // eyes: 1/(2·hh), rim-shade edge (−0.7·hw·RR), lat centre (shape rest lat + lift), arc/hw (morph-blended box)
+uniform vec4  uFace;    // cos roll, sin roll, -, -
+uniform vec4  uQ;       // head-turn map (inverted gaze + foreshorten): q = pl·xy + zw
+uniform mat2  uBA, uBB, uBC; // blobs (floor, pool, bloom): drift⁻¹ with 1/radii folded in
+uniform vec2  uCA, uCB, uCC; //   … and their offsets: blob-space d = B·q + c (|d| = 1 at the blob edge)
+uniform vec4  uFrost;   // halo exp2 k, body edge0, body edge1, early-out radius
+uniform vec4  uPoolK;   // inset at sides (30es), inset at bottom (14es), margin in (10es), margin out (6es+2)
+uniform vec4  uFringeK; // fringe exp2 k, outer-smear exp2 k, fringe strength, haze
+uniform vec4  uMisc;    // pool strength, chroma split scale, contact exp2 k (34u), dent strength
+uniform vec4  uTouch;   // petting contact: x, y (units), pressure (sprung), -
+
+const vec2  C  = vec2(120.0, 120.0);
+const float R  = 118.0;   // orb
+const float RR = 110.0;   // eye sphere (AstridFace projector)
+const vec3  PINK = vec3(0.976, 0.620, 0.902);
+const vec3  CYAN = vec3(0.560, 0.905, 1.000);
+
+// gauss(x, w) = exp(−x²/w²) = exp2(x²·k) with k = −log2(e)/w² precomputed on the CPU
+float g2(float x, float k){ return exp2(x * x * k); }
+// cheap sin-free hash for the dither only (±0.5/255)
+float dhash(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+
+// dark paper wants light added (screen), light paper wants a tint (mix)
+vec3 tint(vec3 col, vec3 c, float a){
+  return mix(mix(col, c, a), 1.0 - (1.0 - col) * (1.0 - c * a * 0.8), uMode.y);
+}
+
+// ---- the eye: ONE SDF in eye-local sphere coords (radians; < 0 inside), box b = (half w, half h) (face.js eyeSDF):
+// 3/4 asymmetry → happy-squint centre → fixed lattice (lower half squashed up, inner more than outer) → rim
+// transform → gradient-normalised ellipse → expression lid line → blink lid from the top (smooth-max'd).
+// smooth max: rounds the corner where the lid line meets the shape by ~k
+float smax(float a, float c, float k){ float h = max(k - abs(a - c), 0.0) / k; return max(a, c) + h * h * k * 0.25; }
+// rp = rim transform applied after the shared lattice warp (outward, up, scale; vec3(0,0,1) = the white itself).
+float eyeSDF(vec2 p, vec2 b, float side, vec3 rp){
+  float sx = 1.0 + side * uAsym.x;
+  p.y += side * uAsym.y; p.x /= sx;
+  p.y -= uShapeC.x;
+  vec2 ib = uEyeA.zw;
+  float f = clamp(-side * p.x * uLat.w, -1.0, 1.0);
+  float wl = uLat.y + (f > 0.0 ? uLat.x - uLat.y : uLat.y - uLat.z) * f;
+  vec2 pw = vec2(p.x, p.y < 0.0 ? p.y * wl : p.y);
+  float js = 1.0 / (1.0 + (wl - 1.0) * clamp(-2.0 * p.y * ib.y, 0.0, 1.0));
+  vec2 ro = vec2(side * rp.x, rp.y);
+  vec2 q = (pw - ro) / rp.z;
+  vec2 e0 = q * ib, e1 = e0 * ib;
+  float k0 = length(e0);
+  float d = k0 * (k0 - 1.0) * inversesqrt(max(dot(e1, e1), 1e-8)) * (rp.z * js);
+  vec2 pl = p - ro;                                    // lid lines ride with the rim (lash line)
+  vec2 cn = side < 0.0 ? uCutN.xy : uCutN.zw;
+  d = max(d, dot(pl, cn) - uAsym.z);                   // expression lid (debug sliders; parked far above = none)
+  return smax(d, pl.y - uShapeC.y, uShapeC.z) * min(sx, 1.0);
+}
+
+// pupil coverage (unclipped), computed by the centre tap (always called first) and reused by the two side
+// taps: the pupil is painted INTO each tap's white colour, so the white's own edge clips it (one AA edge, no
+// seam against the rim behind, no light line) and the pupil itself never gets an RGB split. gFillMax = the union
+// of the three taps' white fills: the pupil is laid over all three channels there too, so where it nears the
+// white's edge (e.g. foreshortened at the limb) the edge's colour split never shows on it.
+float gCovP, gFillMax;
+
+// eye shading for one chroma tap, given its sphere coordinates (lon, lat) and visible-hemisphere Z
+vec3 eyeTap(vec3 col, float lon, float lat, float Z, float rimA, float pc){
+  float side = lon < 0.0 ? -1.0 : 1.0;
+  float u = lon - uShapeC.w * side;
+  // happy: eyes lift a touch and bow into a soft ∩ (edges droop)
+  float v = lat - uEyeK2.z + uEyeK2.w * u * u;
+  float d = eyeSDF(vec2(u, v), uEyeA.xy, side, vec3(0.0, 0.0, 1.0));      // radians
+  float ds = d * RR * (0.5 * Z + 0.5);                        // ≈ screen units (foreshortened)
+  float w  = uEyeK.x;
+  float vis = uEyeP.z * smoothstep(0.02, 0.08, Z);            // lidFade · z>0.02 cull
+  float dsp = max(ds, 0.0);
+  float gv = vis * (1.0 - abs(rimA));                              // the rim stays crisp (no glow over it)
+  col = tint(col, uGlow, 0.26 * g2(dsp, uEyeK.y) * gv);       // soft luminous glow
+  col = mix(col, uAura.rgb, uAura.a * g2(dsp - 1.5, uEyeK.z) * gv);    // pool-coloured aura
+  // pebble fill: bright top-right → eye colour → faint shade lower-left, plus a soft inner edge shade
+  float uu = clamp(u * uEyeK.w * 0.5 + 0.5, 0.0, 1.0);
+  float vv = clamp(0.5 - v * uEyeK2.x, 0.0, 1.0);
+  float t  = clamp((0.45*(1.0 - uu) + vv) * (1.0 / 1.2), 0.0, 1.0);
+  vec3 ec  = t < 0.5 ? mix(uEyeHi, uEye, t * 2.0) : mix(uEye, uEyeLo, 0.55 * smoothstep(0.55, 1.0, t));
+  float rimShade = smoothstep(uEyeK2.y, 0.0, ds) * smoothstep(0.3, 0.9, t);
+  ec = mix(ec, uEyeLo, 0.4 * rimShade);
+  // pupil: upright oval; soft containment (CPU) keeps it inside the white; lids cover it. Centre tap evaluates,
+  // side taps reuse its coverage.
+  if (uToon.y > 0.0 && pc > 0.5) {
+    float psx = 1.0 + side * uAsym.x;
+    vec2 pc2 = side < 0.0 ? uPupilC.xy : uPupilC.zw;
+    vec2 pq = uPupilM * vec2(u / psx + side * uPupil.x - uPupil.y - pc2.x, v + side * uAsym.y - uPupil.z - pc2.y);
+    vec2 p0 = pq * uPupilA.zw, p1 = p0 * uPupilA.zw;           // gradient-normalised ellipse
+    float pk = length(p0);
+    float dp = pk * (pk - 1.0) * inversesqrt(max(dot(p1, p1), 1e-8));
+    dp *= min(psx, 1.0) * uPupil.w * RR * (0.5 * Z + 0.5);
+    gCovP = uToon.y * (1.0 - smoothstep(-w, w, dp));
+  }
+  ec = mix(ec, uToonCol, gCovP);
+  float fill = 1.0 - smoothstep(-w, w, ds);
+  gFillMax = max(gFillMax, fill * vis);
+  return mix(col, ec, fill * vis);
+}
+// soft offset drop shadow (ambient occlusion on the pool): the eye SDF sampled a little lower, Gaussian
+// falloff, multiplied toward the deep pool colour → a darker band hugging the eye's lower edges.
+// Once per pixel (centre tap, before the fill), only inside the eye capsules; follows gaze, lid and fade.
+vec3 eyeShadow(vec3 col, float lon, float lat, float Z){
+  float side = lon < 0.0 ? -1.0 : 1.0;
+  float u = lon - uShapeC.w * side;
+  float v = lat - uEyeK2.z + uEyeK2.w * u * u + uShadow.y;
+  float ds = eyeSDF(vec2(u, v), uEyeA.xy, side, vec3(0.0, 0.0, 1.0)) * RR * (0.5 * Z + 0.5);
+  float sh = uShadow.x * uEyeP.z * smoothstep(0.02, 0.08, Z) * g2(max(ds, 0.0), uShadow.z);
+  return col * mix(vec3(1.0), uDeep * 0.85, sh);
+}
+// rim (the tutorial's step 4): the same white scaled + moved after the shared lattice warp (uRimP), drawn BEHIND
+// the white, so only a crescent shows: thick at the top-outer edge, tapering to nothing low and inside (a lid/lash
+// line). Once per pixel (centre tap); the white's own taps then cover it with the usual split on the edge.
+float eyeRim(float lon, float lat, float Z){
+  float side = lon < 0.0 ? -1.0 : 1.0;
+  float u = lon - uShapeC.w * side;
+  float v = lat - uEyeK2.z + uEyeK2.w * u * u;
+  float d = eyeSDF(vec2(u, v), uEyeA.xy, side, uRimP.xyz);
+  float vis = uEyeP.z * smoothstep(0.02, 0.08, Z);
+  return uToon.x * vis * (1.0 - smoothstep(-uEyeK.x, uEyeK.x, d * RR * (0.5 * Z + 0.5)));
+}
+// squared distance from p to segment ab (capsule test without a sqrt)
+float seg2(vec2 p, vec4 ab){ vec2 pa = p - ab.xy, ba = ab.zw - ab.xy;
+  vec2 e = pa - ba * clamp(dot(pa, ba) / max(dot(ba, ba), 1e-6), 0.0, 1.0); return dot(e, e); }
+// eyes with a gentle RGB split: screen → sphere (r=RR) → undo roll, yaw, pitch → lon/lat → analytic
+// stadium (AstridFace.eyePath). The sphere map runs ONCE at p; the R and B taps (p ± off, 1–4u away)
+// step along its analytic Jacobian (second-order error ≈ 0.01u — invisible) instead of 3 full maps.
+vec3 eyes(vec3 col, vec2 p, vec2 off){
+  vec2 s0 = (p - C) * (1.0 / RR); s0.y = -s0.y;
+  vec2 s = vec2(s0.x*uFace.x + s0.y*uFace.y, -s0.x*uFace.y + s0.y*uFace.x);   // undo roll
+  float rr = dot(s, s);
+  if (rr >= 0.999) return col;
+  float Z  = sqrt(1.0 - rr);
+  float x  = s.x*uRot.x - Z*uRot.y;
+  float z1 = s.x*uRot.y + Z*uRot.x;
+  float y  = s.y*uRot.z + z1*uRot.w;
+  float z  = -s.y*uRot.w + z1*uRot.z;
+  float lon = atan(x, z), lat = asin(clamp(y, -1.0, 1.0));
+  // Jacobian wrt s, then wrt screen units (s = R(−roll)·diag(1,−1)·(p−C)/RR)
+  vec2 gZ  = -s / Z;
+  vec2 gx  = vec2(uRot.x, 0.0) - uRot.y * gZ;
+  vec2 gz1 = vec2(uRot.y, 0.0) + uRot.x * gZ;
+  vec2 gy  = vec2(0.0, uRot.z) + uRot.w * gz1;
+  vec2 gz  = vec2(0.0, -uRot.w) + uRot.z * gz1;
+  float h2 = x*x + z*z;                                       // = cos²(lat)
+  vec2 gLon = (z * gx - x * gz) / h2, gLat = gy * inversesqrt(max(h2, 1e-6));
+  // Δs for the screen offset o: (cr·o.x − sr·o.y, −sr·o.x − cr·o.y)/RR
+  vec2 ds_ = vec2(uFace.x*off.x - uFace.y*off.y, -uFace.y*off.x - uFace.x*off.y) * (1.0 / RR);
+  vec3 dl = vec3(dot(gLon, ds_), dot(gLat, ds_), dot(gZ, ds_));
+  col = eyeShadow(col, lon, lat, Z);
+  float rimA = 0.0;                                            // ≥ 0 on the centre tap, ≤ 0 on the side taps
+  if (uToon.x > 0.0) { rimA = eyeRim(lon, lat, Z); col = mix(col, uToonCol, rimA); }
+  gCovP = 0.0; gFillMax = 0.0;
+  float cg = eyeTap(col, lon, lat, Z, rimA, 1.0).g;            // centre tap (also the pupil)
+  vec3 c = vec3(eyeTap(col, lon + dl.x, lat + dl.y, Z + dl.z, -rimA, 0.0).r, cg,
+                eyeTap(col, lon - dl.x, lat - dl.y, Z - dl.z, -rimA, 0.0).b);   // side taps skip the pupil
+  return mix(c, uToonCol, gCovP * gFillMax);
+}
+
+void main(){
+  vec2 f = gl_FragCoord.xy;
+  vec2 p = vP;                                 // already squash/stretched (petting) in the vertex stage
+  vec2 d = p - C; float r = length(d * 0.01) * 100.0;   // scaled: no fp16 overflow far off-orb (mediump)
+  float dith = (dhash(mod(f, 64.0)) - 0.5) / 255.0;     // dither (kills 8-bit banding)
+
+  // early-out: past the bloom (its gaussian is < 0.3% there) only paper remains
+  if (r > uFrost.w) { gl_FragColor = vec4(uPaper + dith, 1.0); return; }
+
+  // ---- frost: paper · white bloom · frosted body (all fixed; Gaussian edge, no outline) ----
+  float out_ = max(r - R + 4.0, 0.0);
+  vec3 col = mix(uPaper, uHalo, 0.38 * g2(out_, uFrost.x));
+  float body = 1.0 - smoothstep(uFrost.y, uFrost.z, r);
+  col = mix(col, uEdge, body);
+
+  if (r < R + 12.0) {
+    float low = (p.y - C.y) * (1.0 / R);       // −1 top … +1 bottom
+    // ---- petting contact: a shallow dent under the finger (concave lens → slight minify) ----
+    vec2 pt = p - uTouch.xy;
+    float tg = g2(length(pt), uMisc.z) * uTouch.z;
+    vec2 pl = p + pt * (0.22 * uMisc.w * tg);
+    // ---- pool: head-turn (inverted, delayed) → noise warp (vertex grid) → random-target drift ----
+    vec2 q = pl * uQ.xy + uQ.zw + vWarp;
+    float dP = length(uBB * q + uCB);          // main pool: a broad dome rising from below the orb
+    float aP = 1.0 - smoothstep(0.48, 0.98, dP);
+    vec3  cP = mix(uMid, uCore, smoothstep(0.95, 0.55, dP));
+    float dA = length(uBA * q + uCA);          // deeper floor (bottom, slightly off-centre)
+    float aA = 0.55 * (1.0 - smoothstep(0.1, 1.0, dA));
+    float dC = length(uBC * q + uCC);          // pale bloom that morphs through the upper pool
+    float aC = 0.45 * (1.0 - smoothstep(0.0, 1.0, dC));
+    // frosted margin: the pool never reaches the rim (sides wide, bottom thinner)
+    float inset = mix(uPoolK.x, uPoolK.y, smoothstep(0.2, 0.95, low)) + 4.0;
+    float rb = R - inset;                                       // pool boundary radius
+    float m = 1.0 - smoothstep(rb - uPoolK.z, rb + uPoolK.w, r);
+    float pa = clamp(aP * uMisc.x, 0.0, 1.0);
+    vec3 pool = mix(uEdge, cP, pa);
+    pool = mix(pool, uDeep, aA * aP * uMisc.x);
+    pool = mix(pool, uBloomCol, aC * aP);
+    // backlit floor: just above the bottom margin the pool goes lighter + cyan (luminous, not muddy)
+    float lift = smoothstep(0.55, 0.95, low) * m;
+    pool = mix(pool, uLiftCol, 0.55 * lift * pa * (1.0 - uMode.y*0.5));
+    col = mix(col, pool, m * body);
+
+    // ---- haze: white veil, heavier toward the top (fixed) ----
+    float hz = uFringeK.w * (0.06 + 0.70 * smoothstep(-0.38, -0.98, low));
+    col = mix(col, uEdge, clamp(hz, 0.0, 1.0) * body);
+
+    // ---- fringe: blurred prism smear where the blue meets the frosted margin, strongest low ----
+    float fr = uFringeK.z * smoothstep(-0.35, 0.85, low) * (0.25 + 0.75 * clamp(pa * 1.6, 0.0, 1.0));
+    col = tint(col, PINK, 0.44 * fr * g2(r - (rb + 2.0), uFringeK.x));
+    col = tint(col, CYAN, 0.30 * fr * g2(r - (rb - 7.0), uFringeK.x));
+    // faint outer smear on the paper just below the form's soft bottom edge
+    col = tint(col, PINK, 0.07 * uFringeK.z * smoothstep(0.5, 1.0, low) * g2(r - (R + 2.0), uFringeK.y));
+
+    // ---- eyes: 3 taps (R/G/B) at slightly different positions → gentle chromatic edge ----
+    vec2 dir = r > 1e-3 ? d / r : vec2(0.0);
+    vec2 off = (dir * (0.8 + 2.2 * min(r * (1.0 / R), 1.0)) + vec2(1.5, 0.0)) * uMisc.y;
+    // one tight bounding test for all three taps (each tap is within |off| of pl)
+    float rj = uEyeP.w + length(off);
+    if (uEyeP.z > 0.0 && min(seg2(pl, uEyeL), seg2(pl, uEyeR)) < rj * rj)
+      col = eyes(col, pl, off);
+    // contact light: the glass brightens softly where it's touched; dent walls shade (light top-left)
+    col = tint(col, uTouchCol, 0.34 * tg * body);
+    col += vec3(uMisc.w * tg * body * dot(pt, vec2(0.05 * 0.7 / 34.0)));
+  }
+
+  gl_FragColor = vec4(col + dith, 1.0);
+}
+</script>
+<script type="x-shader/x-vertex" id="glass-vert">
+// Astrid glass — vertex stage. A coarse grid (24×24 cells over the canvas; one draw call) carries the
+// work that is smooth across the orb: the canvas → units map, the petting squash/stretch (affine, so
+// interpolation is exact) and the pool's noise warp (value noise with 30–60u features: linear
+// interpolation over ~14u cells stays under ~1/255). Vertex stage = highp everywhere.
+attribute vec2 aPos;          // clip-space grid vertex
+uniform vec4  uVS;            // clip → units: p = uVS.xy + aPos·uVS.zw (y down)
+uniform mat2  uBodyM;         // petting squash/stretch: inverse body transform about the orb centre
+uniform float uNT;            // noise time (advanced by JS × drift speed, wrapped at 28900)
+uniform float uWarp;          // noise warp amplitude (units)
+varying vec2  vP;
+varying vec2  vWarp;
+const vec2 C = vec2(120.0, 120.0);
+float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+// lattice wrapped to 289 cells → periodic, so JS can wrap uNT (28900 = 289 × 100) seamlessly
+float vnoise(vec2 p){
+  vec2 i = floor(p), f = fract(p); f = f*f*(3.0 - 2.0*f);
+  vec2 j = mod(i + 1.0, 289.0); i = mod(i, 289.0);
+  return mix(mix(hash(i), hash(vec2(j.x, i.y)), f.x),
+             mix(hash(vec2(i.x, j.y)), hash(j), f.x), f.y);
+}
+void main(){
+  vec2 p = C + uBodyM * (uVS.xy + aPos * uVS.zw - C);
+  vec2 np = p * 0.016;
+  vec2 warp = vec2(vnoise(np + vec2(uNT*0.11, uNT*0.05)) + 0.5*vnoise(np*2.1 + vec2(-uNT*0.07, uNT*0.09) + 3.7),
+                   vnoise(np + vec2(7.1 - uNT*0.06, 2.3 + uNT*0.10)) + 0.5*vnoise(np*2.1 + vec2(uNT*0.08, -uNT*0.06) + 9.2)) - 0.75;
+  vP = p; vWarp = warp * uWarp;
+  gl_Position = vec4(aPos, 0.0, 1.0);
+}
+</script>
+<script src="coats.js?v=10081240"></script>
+<script src="springs.js?v=10081240"></script>
+<script src="face.js?v=10081240"></script>
+<script>
+(function(){
+'use strict';
+const {palette,rgb}=AstridCoats;
+const {spring,step,stepScaled,snap,save,at}=AstridSprings;
+const F=AstridFace, RR=F.RR;
+const $=id=>document.getElementById(id);
+const Q=new URLSearchParams(location.search);
+/* test hook: ?seed=N makes Math.random deterministic (mulberry32) so scripted frames are reproducible */
+if(Q.has('seed')){ let a=(+Q.get('seed')||1)>>>0; Math.random=function(){a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;}; }
+const STEP=1000/60;                 // the whole motion model runs at a fixed 60 Hz (rig feel), any display rate
+const NT_WRAP=28900;                // noise time period (see glass.frag vnoise): wrap is seamless
+
+/* storage that never throws (private mode, blocked storage, sandboxed iframes) */
+const store={get(k){try{return localStorage.getItem(k)}catch(e){return null}},
+             set(k,v){try{localStorage.setItem(k,v)}catch(e){}},
+             del(k){try{localStorage.removeItem(k)}catch(e){}}};
+
+/* ---------------- tuning (debug sliders) ---------------- */
+const TUNE_KEY='astridSoloTune';   // own key: the full rig's tuning never leaks into the solo page
+const TUNE_DEF={lag:110,gk:.022,gd:.72,follow:.8,dSpeed:1,dAmt:1,edge:1,haze:1,poolH:1,poolI:1,fringe:1,split:1,eyeScale:1.3,eyeSoft:1,
+  cBuild:1,cDecay:1,tickle:900,dent:1,pull:1,vol:1,bDepth:1,bRate:1,bCalm:1,eyeShadow:.3,
+  tRim:1,tPupil:1,rimK:1,pupilK:1,pupilF:1,lopsided:0,lidSad:0,lidAngry:0,lidTired:0};
+const SLIDERS=[
+  ['lag','glass lag (ms)',0,400,5],
+  ['gk','glass spring k',.004,.12,.001],
+  ['gd','glass damping',.4,.95,.01],
+  ['follow','gaze follow',0,1.6,.01],
+  ['dSpeed','drift speed',0,4,.05],
+  ['dAmt','drift amount',0,2.5,.05],
+  ['edge','edge softness',0,3,.05],
+  ['haze','haze amount',0,2,.05],
+  ['poolH','bottom-pool height',.4,1.8,.02],
+  ['poolI','pool strength',0,1.6,.05],
+  ['fringe','fringe strength',0,3,.05],
+  ['split','eye RGB split',0,3,.05],
+  ['eyeScale','eye size',.8,1.6,.01],
+  ['eyeSoft','eye softness',0,3,.05],
+  ['eyeShadow','eye shadow',0,1,.01],
+  ['rimK','toon rim thickness',0,2.5,.05],
+  ['pupilK','toon pupil size',.5,1.5,.01],
+  ['pupilF','toon pupil follow',0,2,.05],
+  ['lopsided','toon lopsided (3/4 view)',0,1,.01],
+  ['lidSad','lid: sad',0,1,.01],
+  ['lidAngry','lid: angry',0,1,.01],
+  ['lidTired','lid: tired',0,1,.01],
+  ['cBuild','content build',0,3,.05],
+  ['cDecay','content decay',0,3,.05],
+  ['tickle','tickle threshold (u/s)',400,2000,10],
+  ['dent','dent strength',0,3,.05],
+  ['pull','pull strength',0,3,.05],
+  ['vol','voice volume',0,2,.05],
+  ['bDepth','breath depth',0,3,.05],
+  ['bRate','breath rate',.3,3,.05],
+  ['bCalm','content calming',0,2,.05],
+];
+const TOGGLES=[['tRim','toon rim'],['tPupil','toon pupils']];   // debug on/off (0/1 in T)
+function loadTune(){            // only known keys, finite, clamped to the slider range
+  const t=Object.assign({},TUNE_DEF); let s=null;
+  try{s=JSON.parse(store.get(TUNE_KEY)||'null')}catch(e){}
+  if(s&&typeof s==='object') TOGGLES.forEach(([k])=>{ if(k in s) t[k]=s[k]?1:0; });
+  if(s&&typeof s==='object') SLIDERS.forEach(([k,,min,max])=>{const v=+s[k]; if(k in s&&Number.isFinite(v)) t[k]=Math.min(max,Math.max(min,v));});
+  return t;
+}
+let T=loadTune();
+
+/* ---------------- WebGL ---------------- */
+const cv=$('gl'), stage=$('astrid');
+const GL_OPTS={antialias:false,alpha:false,depth:false,stencil:false,premultipliedAlpha:false,powerPreference:'high-performance'};
+const toFallback=why=>{console.warn('Astrid: '+why+', using the SVG fallback'); location.replace('v6-svg.html'+location.search);};
+const gl=cv.getContext('webgl',GL_OPTS)||cv.getContext('experimental-webgl',GL_OPTS);
+if(!gl){ toFallback('WebGL unavailable'); return; }
+const UNIFORMS=['uVS','uBodyM','uNT','uWarp','uPaper','uCore','uDeep','uMid','uEdge','uHalo','uEye','uEyeHi','uEyeLo','uGlow','uBloomCol','uLiftCol','uTouchCol','uAura','uMode',
+  'uRot','uEyeP','uEyeA','uShapeC','uAsym','uCutN','uLat','uShadow','uToon','uRimP','uPupil','uPupilA','uPupilM','uPupilC','uToonCol','uEyeL','uEyeR','uEyeK','uEyeK2','uFace','uQ','uBA','uBB','uBC','uCA','uCB','uCC','uFrost','uPoolK','uFringeK','uMisc','uTouch'];
+let U={}, lost=false; const GN=24, GCOUNT=GN*GN*6;
+const draw=()=>gl.drawElements(gl.TRIANGLES,GCOUNT,gl.UNSIGNED_SHORT,0);
+let prog=null;
+function buildProg(){
+  const sh=(type,id,pre)=>{const s=gl.createShader(type);gl.shaderSource(s,pre+$(id).textContent);gl.compileShader(s);
+    if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)&&!gl.isContextLost()){ const msg='Astrid shader compile error ('+id+'):\n'+gl.getShaderInfoLog(s); console.error(msg); window.__SHADER_ERR=(window.__SHADER_ERR||'')+msg; }
+    return s;};
+  const p=gl.createProgram(), vs=sh(gl.VERTEX_SHADER,'glass-vert',''), fs=sh(gl.FRAGMENT_SHADER,'glass-frag','');
+  gl.attachShader(p,vs); gl.attachShader(p,fs);
+  gl.bindAttribLocation(p,0,'aPos'); gl.linkProgram(p);
+  gl.deleteShader(vs); gl.deleteShader(fs);                 // flagged; freed with the program
+  if(!gl.getProgramParameter(p,gl.LINK_STATUS)){
+    if(!gl.isContextLost()){ const msg='Astrid link error: '+gl.getProgramInfoLog(p); console.error(msg); window.__SHADER_ERR=(window.__SHADER_ERR||'')+msg; }
+    gl.deleteProgram(p); return false;
+  }
+  if(prog&&gl.isProgram(prog)) gl.deleteProgram(prog);
+  prog=p; gl.useProgram(p);
+  U={}; UNIFORMS.forEach(n=>U[n]=gl.getUniformLocation(p,n));
+  return true;
+}
+
+function initGL(){              // (re)build everything GPU-side; also used after a context restore
+  prog=null;                    // a restored context has no old program to delete
+  if(!buildProg()) return false;
+  // one draw call: a GN×GN grid over the canvas (the vertex stage carries the smooth per-pixel work)
+  const v=new Float32Array((GN+1)*(GN+1)*2), ix=new Uint16Array(GN*GN*6);
+  for(let j=0,k=0;j<=GN;j++) for(let i=0;i<=GN;i++){v[k++]=i/GN*2-1; v[k++]=j/GN*2-1;}
+  for(let j=0,k=0;j<GN;j++) for(let i=0;i<GN;i++){const a=j*(GN+1)+i, b=a+1, c=a+GN+1, d=c+1; ix[k++]=a;ix[k++]=b;ix[k++]=c;ix[k++]=b;ix[k++]=d;ix[k++]=c;}
+  gl.bindBuffer(gl.ARRAY_BUFFER,gl.createBuffer()); gl.bufferData(gl.ARRAY_BUFFER,v,gl.STATIC_DRAW);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,gl.createBuffer()); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,ix,gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0,2,gl.FLOAT,false,0,0);
+  return true;
+}
+if(!initGL()&&!gl.isContextLost()){ toFallback('shader failed to build'); return; }
+
+/* ---------------- size / DPR ---------------- */
+let W=0,H=0,dpr=1,rscale=1, needResize=true;   // rscale: adaptive render scale
+/* The canvas covers only the orb + its bloom (square, centred on the stage, clipped to the viewport);
+   the page background is the same paper colour, so nothing outside it needs drawing.
+   Extent: early-out radius from the edge-softness slider × 1.12 for the max petting stretch (+ wobble). */
+function orbExtent(){ const es=T.edge; return Math.max(118-4+2.5*(10*es+3),118+12)*1.12+2; }   // units
+/* stage rect cached here (resize / ResizeObserver / DPR change) so pointer events neither allocate a
+   DOMRect nor force a layout read; the page doesn't scroll (overflow hidden) */
+const SR={l:.5,t:.5,w:.5,h:.5};
+function stageRect(){ const r=stage.getBoundingClientRect(); SR.l=r.left; SR.t=r.top; SR.w=r.width||1; SR.h=r.height||1; return r; }
+function resize(){
+  needResize=false;
+  const sr=stageRect();
+  if(lost) return;
+  const vw=document.documentElement.clientWidth||innerWidth, vh=document.documentElement.clientHeight||innerHeight;
+  const k=340/Math.max(1,sr.width), half=orbExtent()/k;                 // units per CSS px, half-side (CSS px)
+  const scx=sr.left+sr.width/2, scy=sr.top+sr.height/2;
+  const L=Math.max(0,Math.floor(scx-half)), Tp=Math.max(0,Math.floor(scy-half));
+  const Wc=Math.max(1,Math.min(vw,Math.ceil(scx+half))-L), Hc=Math.max(1,Math.min(vh,Math.ceil(scy+half))-Tp);
+  const st=cv.style; st.left=L+'px'; st.top=Tp+'px'; st.width=Wc+'px'; st.height=Hc+'px';
+  dpr=Math.min(window.devicePixelRatio||1,2)*rscale;                    // DPR capped at 2× (× adaptive scale)
+  W=Math.max(1,Math.round(Wc*dpr)); H=Math.max(1,Math.round(Hc*dpr));
+  if(cv.width!==W||cv.height!==H){cv.width=W;cv.height=H;}
+  gl.viewport(0,0,W,H);
+  // clip → units (y down): p = C + (cssPixel − stageCentre)·k
+  gl.uniform4f(U.uVS,120+(L+Wc/2-scx)*k,120+(Tp+Hc/2-scy)*k,Wc/2*k,-Hc/2*k);
+}
+addEventListener('resize',()=>{needResize=true;});
+if(window.ResizeObserver) new ResizeObserver(()=>{needResize=true;}).observe(stage);
+(function watchDpr(){            // moving to a screen with a different DPR doesn't always fire resize
+  if(!window.matchMedia) return;
+  const mq=matchMedia(`(resolution: ${window.devicePixelRatio||1}dppx)`);
+  const on=()=>{needResize=true; mq.removeEventListener?mq.removeEventListener('change',on):mq.removeListener(on); watchDpr();};
+  mq.addEventListener?mq.addEventListener('change',on):mq.addListener(on);
+})();
+
+/* ---------------- coat: ColorWay carbon (read-only, coats.js; identical in light and dark) ---------------- */
+const COAT='carbon', DARK=false;
+const themeMeta=document.querySelector('meta[name=theme-color]'); let coatDark=0;
+function applyCoat(){
+  const p=palette(COAT,DARK), name=COAT;
+  document.documentElement.style.setProperty('--paper',p.paper);
+  document.documentElement.style.setProperty('--ink',p.ink);
+  if(themeMeta) themeMeta.content=p.paper;
+  if(!lost){
+    const c3=(u,h)=>gl.uniform3fv(U[u],rgb(h));
+    c3('uPaper',p.paper);c3('uCore',p.core);c3('uDeep',p.deep);c3('uMid',p.mid);c3('uEdge',p.edge);c3('uHalo',p.halo);
+    c3('uEye',p.eye);c3('uEyeHi',p.eyeHi);c3('uEyeLo',p.eyeLo);c3('uGlow',p.glow);
+    gl.uniform2f(U.uMode,p.inner,p.dark);
+    // derived colours that used to be mixed per pixel
+    const mx=(a,b,t)=>a.map((v,i)=>v+(b[i]-v)*t), CY_=[.560,.905,1.0];
+    const mid=rgb(p.mid), edge=rgb(p.edge), core=rgb(p.core), halo=rgb(p.halo), glow=rgb(p.glow);
+    gl.uniform3fv(U.uBloomCol,mx(mid,edge,.35)); gl.uniform3fv(U.uLiftCol,mx(mid,CY_,.45)); gl.uniform3fv(U.uTouchCol,mx(halo,glow,p.dark));
+    // toon ink: must contrast with the eye. Glass = deep navy (the tutorial's dark slate; deeper in dark mode).
+    // Coats with light eyes (dark mode) → a deep tone from paper + pool; coats whose eye IS the dark mark (light
+    // mode) → their paper, so the pupils and rim still read (an inverted toon).
+    const toon=name==='glass'?(p.dark?'#13204a':'#2a3d66'):(AstridCoats.lum(p.eye)>.5?AstridCoats.mix(p.paper,p.deep,.15):p.paper);
+    gl.uniform3fv(U.uToonCol,rgb(toon));
+    const au=mx(core,mid,.3); gl.uniform4f(U.uAura,au[0],au[1],au[2],.42*(1-.4*p.dark));
+  }
+  coatDark=p.dark;
+}
+const bar=$('bar');
+bar.addEventListener('pointerdown',e=>e.stopPropagation());
+
+/* ---------------- voice: tiny WebAudio synth (cute, small, a little high; WALL-E-ish scoops) ----------------
+   Each chirp = triangle + soft octave sine through a moving vowel formant ("oo"→"ee") and a lowpass, with a
+   pitch scoop (dip, swoop up, settle) and a quick soft envelope. Unlocks on the first user gesture only.
+   Rate-limited and quiet; nodes are disconnected when they finish (no leaks). Mute is remembered. */
+const Voice=(()=>{
+  const AC=window.AudioContext||window.webkitAudioContext;
+  let ctx=null, out=null, muted=store.get('astridMute')==='1', last=-1, played=0;
+  function unlock(){
+    if(!AC) return;
+    const ua=navigator.userActivation; if(ua&&!ua.isActive) return;   // only inside a real gesture (no autoplay warning)
+    if(!ctx){
+      try{ ctx=new AC(); }catch(e){ return; }
+      const comp=ctx.createDynamicsCompressor(); comp.threshold.value=-18; comp.ratio.value=4;
+      out=ctx.createGain(); out.gain.value=.5; out.connect(comp); comp.connect(ctx.destination);
+    }
+    if(ctx.state==='suspended') ctx.resume().catch(()=>{});
+  }
+  // one scooped chirp starting at time t0 (ctx time). f: settle pitch (Hz). shape: [start×, peak×, end×]
+  function chirp1(t0,f,dur,amp,shape){
+    const o1=ctx.createOscillator(), o2=ctx.createOscillator(), g2=ctx.createGain();
+    const bp=ctx.createBiquadFilter(), lp=ctx.createBiquadFilter(), env=ctx.createGain();
+    o1.type='triangle'; o2.type='sine'; g2.gain.value=.22;
+    bp.type='bandpass'; bp.Q.value=1.6; lp.type='lowpass'; lp.frequency.value=3200; lp.Q.value=.5;
+    const [a,b,c]=shape, tp=t0+dur*.45, te=t0+dur;
+    [[o1.frequency,1],[o2.frequency,2.004]].forEach(([fr,m])=>{
+      fr.setValueAtTime(f*a*m,t0); fr.exponentialRampToValueAtTime(f*b*m,tp); fr.exponentialRampToValueAtTime(f*c*m,te);
+    });
+    bp.frequency.setValueAtTime(800,t0); bp.frequency.exponentialRampToValueAtTime(2100,tp); bp.frequency.exponentialRampToValueAtTime(1500,te);
+    env.gain.setValueAtTime(.0001,t0); env.gain.exponentialRampToValueAtTime(amp,t0+.016);
+    env.gain.exponentialRampToValueAtTime(amp*.55,tp); env.gain.exponentialRampToValueAtTime(.0001,te);
+    const dry=ctx.createGain(); dry.gain.value=.35;              // a little un-filtered body under the formant
+    o1.connect(bp); o2.connect(g2); g2.connect(bp); o1.connect(dry);
+    bp.connect(lp); dry.connect(lp); lp.connect(env); env.connect(out);
+    o1.start(t0); o2.start(t0); o1.stop(te+.02); o2.stop(te+.02);
+    o1.onended=()=>{[o1,o2,g2,bp,lp,env,dry].forEach(n=>{try{n.disconnect()}catch(e){}});};
+    played++;
+  }
+  const ready=gap=>{
+    if(muted||!ctx||ctx.state!=='running') return false;
+    const now=ctx.currentTime; if(now-last<gap) return false; last=now; return true;
+  };
+  const vol=()=>.11*Math.max(0,T.vol);
+  return {
+    unlock,
+    /* contented chirp: pitch rises with content (≈560 → 950 Hz), sometimes a second little "mm-hm" */
+    chirp(c){ if(!ready(.6)||vol()<=0) return; const t=ctx.currentTime+.01, f=560*(1+.7*c)*(1+(Math.random()-.5)*.06);
+      chirp1(t,f,.2+.06*Math.random(),vol()*(.7+.3*c),[.72,1.18,1.04]);
+      if(c>.55&&Math.random()<.4) chirp1(t+.2,f*1.12,.14,vol()*.6,[.85,1.2,1.1]); },
+    /* tickle: giggly double chirp, higher, the second one tumbling down */
+    giggle(){ if(!ready(.7)||vol()<=0) return; const t=ctx.currentTime+.01, f=1020*(1+(Math.random()-.5)*.08);
+      chirp1(t,f,.11,vol()*.9,[.8,1.25,1.12]); chirp1(t+.095,f*1.14,.13,vol()*.8,[1.1,1.22,.86]);
+      if(Math.random()<.35) chirp1(t+.2,f*1.05,.1,vol()*.5,[1.05,1.15,.8]); },
+    get muted(){return muted;},
+    setMuted(m){ muted=!!m; store.set('astridMute',muted?'1':'0'); if(!muted) unlock(); },
+    suspend(){ if(ctx&&ctx.state==='running') ctx.suspend().catch(()=>{}); },
+    resume(){ if(ctx&&ctx.state==='suspended') ctx.resume().catch(()=>{}); },
+    stats:()=>({ctx:ctx?ctx.state:'none',muted,played}),
+  };
+})();
+/* unlock on the first real gesture. Touch: pointerdown is NOT an activation event (pointerup/touchend are) */
+const gest=['pointerdown','pointerup','touchend','keydown','click'];
+const unlockOnGesture=()=>{ Voice.unlock(); if(Voice.stats().ctx==='running') gest.forEach(t=>removeEventListener(t,unlockOnGesture,true)); };
+gest.forEach(t=>addEventListener(t,unlockOnGesture,{capture:true,passive:true}));
+const sb=document.createElement('button'); sb.type='button'; sb.className='snd';
+const showSnd=()=>{sb.textContent=Voice.muted?'Muted':'Sound'; sb.setAttribute('aria-pressed',String(!Voice.muted)); sb.title=Voice.muted?'Unmute Astrid':'Mute Astrid';};
+sb.onclick=e=>{e.stopPropagation(); Voice.setMuted(!Voice.muted); showSnd();};
+showSnd(); bar.appendChild(sb);
+document.addEventListener('visibilitychange',()=>document.hidden?Voice.suspend():Voice.resume());
+
+/* ---------------- pose + glass state ---------------- */
+const yaw=spring(0,.07,.74), pitch=spring(0,.07,.74), size=spring(1,.16,.62), lid=spring(1,.45,.5);
+const gYaw=spring(0,T.gk,T.gd), gPitch=spring(0,T.gk,T.gd);
+/* toon pupils: their own quicker spring on the gaze TARGET, so they lead the head turn (overlap) */
+const pupX=spring(0,.2,.6), pupY=spring(0,.2,.6);
+/* pupil life:
+   dilation: content → up to 1.22× wider (1.5× area). Its spring is nearly frozen while the eyes are open (a slow
+   leak, τ ≈ 14 s) and quick while the lid is shut, so most of the change happens inside blinks.
+   dart stretch: the pupil spring's velocity (gaze units/s), smoothed, arms the stretch above STR_ON and disarms
+   below STR_OFF (hysteresis), so pointer-following (≤ ~4/s) never triggers it; darts and flicks (≥ 6/s) do.
+   The amount rides a quick soft spring (mark-squash: ζ ≈ .5, one small rebound at most). */
+const pupD=spring(1,.0004,.75), pStr=spring(0,.5,.4);
+const STR_ON=4.5, STR_OFF=2.5, STR_FULL=8;
+const PSV={vx:.5,vy:.5,dx:.5,dy:.5,armed:false}; PSV.vx=PSV.vy=PSV.dy=0; PSV.dx=1;
+/* pose history for the glass lag: preallocated ring (no per-tick allocation). 64 ticks > 400 ms max lag */
+const HN=64, hT=new Float64Array(HN), hY=new Float64Array(HN), hP=new Float64Array(HN); let h0=0, hLen=0;
+/* blob drift: random targets on very soft springs (no sine) — floor, pool, bloom */
+const mkDrift=amp=>({amp,x:spring(0,.006,.9),y:spring(0,.006,.9),sx:spring(1,.006,.9),sy:spring(1,.006,.9),r:spring(0,.005,.9),next:0});
+const drifts=[mkDrift({t:5,s:.1,r:10}),mkDrift({t:7,s:.16,r:14}),mkDrift({t:11,s:.3,r:40})];
+const BOX=354/100;   // v6 drift % → units (drift box = 150% of the 236u orb clip)
+const ALL=[yaw,pitch,size,lid,gYaw,gPitch,pupX,pupY,pupD,pStr]; drifts.forEach(d=>ALL.push(d.x,d.y,d.sx,d.sy,d.r));
+
+/* test hooks: ?yaw=&pitch= freeze the pose (glass snapped); ?still freezes drift + blink + glances */
+const forced=Q.has('yaw')||Q.has('pitch'), still=Q.has('still');
+if(forced){
+  const fy=+Q.get('yaw')||0, fp=+Q.get('pitch')||0;
+  [[yaw,fy],[pitch,fp],[gYaw,fy],[gPitch,fp],[pupX,fy],[pupY,fp]].forEach(([s,v])=>snap(s,v));
+}
+/* reduced motion: no idle glances, slower glass drift (pointer follow, blinks and taps stay) */
+const rmq=window.matchMedia?matchMedia('(prefers-reduced-motion: reduce)'):null;
+let RM=!!(rmq&&rmq.matches);
+if(rmq) (rmq.addEventListener?rmq.addEventListener('change',e=>RM=e.matches):rmq.addListener(e=>RM=e.matches));
+
+/* per-frame doubles live on one object (fields update in place; a closure `let` would box a new number per write) */
+const CK={simT:.5,noiseT:.5,prevNT:.5,last:.5,acc:.5,alpha:.5,pointerAt:.5}; CK.simT=CK.noiseT=CK.prevNT=CK.last=CK.acc=CK.alpha=0; CK.pointerAt=-1e9;
+let nextGlance=1800+Math.random()*2600, nextBlink=2800+Math.random()*3400, blinkUntil=-1, doubleAt=-1;
+function aim(ev){
+  if(forced) return;
+  if(needResize) stageRect();                                    // layout changed since the last frame
+  const dx=(ev.clientX-(SR.l+SR.w/2))/(SR.w/2), dy=(ev.clientY-(SR.t+SR.h/2))/(SR.h/2);
+  yaw.t=Math.max(-1,Math.min(1,dx))*.5; pitch.t=Math.max(-1,Math.min(1,dy))*.34; CK.pointerAt=CK.simT;
+}
+addEventListener('pointermove',aim,{passive:true});
+addEventListener('pointerdown',aim,{passive:true});          // touch has no hover: a touch aims too
+const lookHome=()=>{ if(!forced){yaw.t=0;pitch.t=0;} };       // pointer left the window → eyes come home
+document.addEventListener('pointerout',e=>{ if(!e.relatedTarget&&e.pointerType==='mouse') lookHome(); },{passive:true});
+addEventListener('blur',lookHome);
+const blink=(ms)=>{blinkUntil=Math.max(blinkUntil,CK.simT+(ms||110));};
+const tap=()=>{size.v+=.09; blink();};
+stage.addEventListener('keydown',e=>{ if(e.key==='Enter'||e.key===' '){e.preventDefault();Voice.unlock();tap();} });
+const R_HIT=128;
+
+/* ================= petting ================= */
+/* Units: AstridFace 240-space (orb r118 at 120,120); speeds in units/s. All decisions run inside tick()
+   (fixed 60 Hz), so the feel is identical at 30/60/120 Hz. Pointer events only record raw positions. */
+const roll=spring(0,.12,.7), happy=spring(0,.06,.8);             // face: tickle wiggle roll, eased content
+const press=spring(0,.14,.62), tX=spring(120,.3,.55), tY=spring(120,.3,.55);   // contact: pressure + spot
+const dragX=spring(0,T.gk,T.gd), dragY=spring(0,T.gk,T.gd);      // pool pulled along the stroke (glass lag)
+const bodyA=spring(0,.1,.8);                                     // squash/stretch amount (wobbles on release)
+const PET_SPRINGS=[roll,happy,press,tX,tY,dragX,dragY,bodyA]; ALL.push(...PET_SPRINGS);
+const pet={down:false,id:-1,in:false,x:120,y:120,px:120,py:120,vx:0,vy:0,dx:1,dy:0,path:0,downAt:0,
+           lx:0,ly:0,revs:[],lastCalm:-1e9,lastTickle:-1e9,content:0,nextChirp:0,bx:1,by:0};
+const qContent=Q.has('content')?Math.max(0,Math.min(1,+Q.get('content')||0)):null;   // test hook: pin content
+const blinkQ=[], kickQ=[];
+const UPT={x:0,y:0};
+const toUnits=e=>{if(needResize) stageRect(); const k=340/SR.w;
+  UPT.x=120+(e.clientX-(SR.l+SR.w/2))*k; UPT.y=120+(e.clientY-(SR.t+SR.h/2))*k; return UPT;};
+let suppressClick=false;
+stage.addEventListener('pointerdown',e=>{
+  if(e.button>0||forced) return;
+  Voice.unlock(); suppressClick=true;
+  const u=toUnits(e);
+  try{stage.setPointerCapture(e.pointerId);}catch(_){}
+  e.preventDefault();                                            // no text selection / emulated mouse / scroll
+  Object.assign(pet,{down:true,id:e.pointerId,x:u.x,y:u.y,px:u.x,py:u.y,lx:0,ly:0,path:0,downAt:CK.simT});
+  pet.revs.length=0;
+});
+stage.addEventListener('pointermove',e=>{
+  if(!pet.down||e.pointerId!==pet.id) return;
+  const u=toUnits(e), ddx=u.x-pet.x, ddy=u.y-pet.y; pet.path+=Math.sqrt(ddx*ddx+ddy*ddy); pet.x=u.x; pet.y=u.y;
+},{passive:true});
+const petEnd=e=>{
+  if(!pet.down||(e&&e.pointerId!==pet.id)) return;
+  pet.down=false;
+  if(CK.simT-pet.downAt<260&&pet.path<6) tap();                    // a short tap keeps the old tap reaction
+};
+stage.addEventListener('pointerup',petEnd); stage.addEventListener('pointercancel',petEnd);
+stage.addEventListener('lostpointercapture',petEnd);
+stage.addEventListener('click',()=>{ if(suppressClick){suppressClick=false;return;} tap(); });   // AT / synthetic clicks
+stage.addEventListener('contextmenu',e=>{ if(pet.down) e.preventDefault(); });
+
+/* ================= breathing (glass only: pool, deep floor, bloom — never the eyes, lids or pose) =================
+   Not a wave: a breath cycle of eased segments (inhale → exhale → short pause at the bottom), every breath
+   with its own random period (3.5–5.5 s) and depth (0.6–1.0); the inhale takes ~42% of the active time, so it
+   is a little quicker than the exhale. A spring chases that target (organic, no corners) and the bloom
+   follows on a softer spring a beat later. Content (petting) → slower, slightly deeper breaths; a tickle →
+   a couple of quick shallow breaths, then it settles; reduced motion → half depth. All on the CPU. */
+const breath=spring(0,.12,.7), breathL=spring(0,.05,.78);
+ALL.push(breath,breathL);
+const BR={seg:2,t0:0,dur:.5,from:0,to:0,tIn:1,tOut:1,tPause:.5,depth:.5,quick:0,inQuick:false};
+BR.dur=200+Math.random()*900;                                     // start somewhere in a pause
+const qBreath=Q.has('breath')?Math.max(0,Math.min(1.2,+Q.get('breath')||0)):null;   // test hook: pin the breath
+const ease=u=>u*u*(3-2*u);                                        // eased segment (smoothstep), not a sine
+function breathPlan(){                                            // a new breath: period, depth, pause
+  const c=Math.max(0,Math.min(1,happy.x))*T.bCalm;
+  let period,pause,depth;
+  if(BR.quick>0){ BR.quick--; BR.inQuick=true; period=850+Math.random()*350; pause=0; depth=.35+Math.random()*.15; }
+  else { BR.inQuick=false; period=(3500+Math.random()*2000)*(1+.4*c); pause=(250+Math.random()*350)*(1+.6*c); depth=(.6+Math.random()*.4)*(1+.2*c); }
+  const rate=Math.max(.3,T.bRate), act=Math.max(300,period-pause)/rate;
+  BR.tIn=.42*act; BR.tOut=.58*act; BR.tPause=pause/rate; BR.depth=depth*(RM?.5:1);
+}
+function breathSeg(seg){
+  BR.seg=seg; BR.t0=CK.simT; BR.from=breath.t;
+  if(seg===0){ breathPlan(); BR.dur=BR.tIn; BR.to=BR.depth; }
+  else if(seg===1){ BR.dur=BR.tOut; BR.to=0; }
+  else { BR.dur=BR.tPause; BR.to=0; }
+}
+function breathTick(){
+  if(qBreath!==null){ snap(breath,qBreath); snap(breathL,qBreath); return; }
+  if(still){ snap(breath,0); snap(breathL,0); return; }
+  let n=0;
+  while(CK.simT-BR.t0>=BR.dur&&n++<3) breathSeg(BR.seg===0?1:BR.seg===1?(BR.tPause>0?2:0):0);
+  const u=Math.min(1,(CK.simT-BR.t0)/Math.max(1,BR.dur));
+  breath.t=BR.from+(BR.to-BR.from)*ease(u);
+  step(breath); breathL.t=breath.x; step(breathL);
+}
+function breathQuick(fresh){                                      // tickle: a couple of quick short breaths
+  BR.quick=fresh?2:Math.max(BR.quick,1);
+  if(fresh&&!BR.inQuick){                                         // interrupt: quick exhale from where it is, then the quick breaths
+    BR.inQuick=true; BR.tPause=0; BR.seg=1; BR.t0=CK.simT; BR.from=breath.t; BR.to=0;
+    BR.dur=(250+350*Math.min(1,breath.t))/Math.max(.3,T.bRate);
+  }
+}
+
+function tickle(){
+  const fresh=CK.simT-pet.lastTickle>1200;                          // first tickle of a scrub gets the full burst
+  pet.lastTickle=CK.simT; pet.content=Math.min(1,pet.content+.06);
+  const sg=Math.random()<.5?-1:1;
+  [0,85,170].forEach((t,i)=>kickQ.push({t:CK.simT+t,s:(i%2?-sg:sg)*(i===2?.6:1)}));   // quick wiggle
+  (fresh?[0,160,320]:[0]).forEach(t=>blinkQ.push(CK.simT+t));                            // blink burst (short blinks)
+  bodyA.v+=.02;
+  breathQuick(fresh);
+  Voice.giggle();
+}
+function petTick(dt){
+  const P=pet, ex=P.x-120, ey=P.y-120, inOrb=ex*ex+ey*ey<R_HIT*R_HIT;
+  let rsp=0;
+  if(P.down){
+    const mx=P.x-P.px, my=P.y-P.py; P.px=P.x; P.py=P.y;
+    const vx=mx*1000/dt, vy=my*1000/dt; rsp=Math.sqrt(vx*vx+vy*vy);
+    P.vx+=(vx-P.vx)*.35; P.vy+=(vy-P.vy)*.35;
+    // direction reversals (scrubbing): raw step direction flips against the last stroke direction
+    if(rsp>150&&inOrb){
+      const ux=vx/rsp, uy=vy/rsp;
+      if(ux*P.lx+uy*P.ly<-.2) P.revs.push(CK.simT);
+      P.lx=ux; P.ly=uy;
+    }
+  } else { P.vx*=.8; P.vy*=.8; }
+  while(P.revs.length&&P.revs[0]<CK.simT-700) P.revs.shift();
+  const sp=Math.sqrt(P.vx*P.vx+P.vy*P.vy);
+  if(sp>60){ P.bx=P.vx/sp; P.by=P.vy/sp; }
+  const stroking=P.down&&inOrb;
+  // speed bands
+  if(stroking&&CK.simT-P.downAt>100&&(sp>T.tickle||P.revs.length>=3)){
+    if(CK.simT-P.lastTickle>450) tickle();
+  } else if(stroking&&sp>25&&sp<Math.min(T.tickle*.6,560)){
+    const gentle=Math.min(1,(sp-25)/90)*(1-Math.max(0,(sp-320)/(Math.min(T.tickle*.6,560)-320+1e-3))*.6);
+    P.content=Math.min(1,P.content+.42*T.cBuild*gentle*dt/1000);
+    P.lastCalm=CK.simT;
+    if(P.content>.12&&CK.simT>=P.nextChirp){ Voice.chirp(P.content); P.nextChirp=CK.simT+1100+Math.random()*700; }
+  }
+  // afterglow: hold the happy face ~1.5 s after the last stroke, then decay back to rest life
+  if(CK.simT-Math.max(P.lastCalm,P.lastTickle)>1500) P.content=Math.max(0,P.content-.35*T.cDecay*dt/1000);
+  if(qContent!==null) P.content=qContent;
+  happy.t=P.content;
+  // contact + pool drag + body
+  press.t=stroking?1:0;
+  if(press.x<.02&&stroking){ snap(tX,P.x); snap(tY,P.y); } else { tX.t=P.x; tY.t=P.y; }
+  dragX.k=dragY.k=T.gk; dragX.d=dragY.d=T.gd;
+  const lim=40, pk=.05*T.pull;
+  dragX.t=stroking?Math.max(-lim,Math.min(lim,P.vx*pk)):0; dragY.t=stroking?Math.max(-lim,Math.min(lim,P.vy*pk)):0;
+  bodyA.t=stroking?Math.min(1,sp/700)*.07:0;
+  while(kickQ.length&&kickQ[0].t<=CK.simT){const k=kickQ.shift(); yaw.v+=.07*k.s; roll.v+=.09*k.s;}
+  while(blinkQ.length&&blinkQ[0]<=CK.simT){blinkQ.shift(); blink(70);}
+  for(let i=0;i<PET_SPRINGS.length;i++) step(PET_SPRINGS[i]);
+}
+
+function pupilLife(){        // pupils: dilation (mostly inside blinks) + dart stretch (see pupD / pStr)
+  const shut=Math.max(0,Math.min(1,(.4-lid.x)/.3));               // 0 open (incl. the happy half-lid) … 1 shut
+  pupD.k=.0004+(.3-.0004)*shut; pupD.d=.75-.3*shut;
+  pupD.t=1+(F.TOON.dilMax-1)*Math.max(0,Math.min(1,happy.x)); step(pupD);
+  const vx=pupX.v*120, vy=pupY.v*(60/.34);                        // gaze units/s (±1 = full range), +y down
+  PSV.vx+=(vx-PSV.vx)*.55; PSV.vy+=(vy-PSV.vy)*.55;
+  const sp=Math.sqrt(PSV.vx*PSV.vx+PSV.vy*PSV.vy);
+  if(PSV.armed){ if(sp<STR_OFF) PSV.armed=false; } else if(sp>STR_ON) PSV.armed=true;
+  pStr.t=PSV.armed?Math.max(0,Math.min(1,(sp-STR_OFF)/(STR_FULL-STR_OFF))):0;
+  if(sp>.5){ PSV.dx=PSV.vx/sp; PSV.dy=-PSV.vy/sp; }               // eye-local direction (v up); held while slow
+  step(pStr);
+}
+/* blink clock + gaze-shift blinks (springs only).
+   closure: a hidden closure spring rides every blink (fast close ≈100 ms to .97, then a 35 ms hold); once the hold
+     is over the blink request ends (blinkUntil), so a blink re-requested mid-way never stretches past one closure.
+   gaze: the pointer target is tracked in darts + holds (≥ 150 ms + exponential); a dart of more than .6 of the gaze
+     range blinks (80 ms). */
+const lClose=spring(0,.5,.5);
+const BK={g:3600,s:.45,h:35,ck:.4,cd:.45,k:.10,d:.67,bp:0,bHold:0};
+const GZ={tx:0,ty:0,fx:0,fy:0,glAt:-1,holdUntil:0};
+function blinkLife(){
+  const rest=still||forced;
+  if(rest) BK.bp=0;
+  else {
+    if(CK.simT<blinkUntil&&!BK.bp) BK.bp=1;
+    if(BK.bp===1&&lClose.x>=.97*Math.min(1,1.02)){ BK.bp=2; BK.bHold=CK.simT+BK.h; }
+    if(BK.bp===2&&CK.simT>=BK.bHold){ BK.bp=0; blinkUntil=Math.min(blinkUntil,CK.simT); }
+  }
+  const tc=BK.bp?1.02:0;
+  if(tc>lClose.x){ lClose.k=BK.ck; lClose.d=BK.cd; } else { lClose.k=BK.k; lClose.d=BK.d; }
+  lClose.t=tc; step(lClose);
+  const cl=v=>Math.max(-1,Math.min(1,v));
+  if(forced){ GZ.tx=cl(pupX.x/.5); GZ.ty=cl(pupY.x/.34); return; }
+  const desX=cl(yaw.t/.5), desY=cl(pitch.t/.34), dX=desX-GZ.tx, dY=desY-GZ.ty, dd=Math.sqrt(dX*dX+dY*dY);
+  if(CK.simT>=GZ.holdUntil&&dd>.045){
+    GZ.fx=desX; GZ.fy=desY; GZ.tx+=dX*.93; GZ.ty+=dY*.93; GZ.glAt=CK.simT+70;
+    GZ.holdUntil=CK.simT+150+Math.min(1400,-Math.log(1-Math.random()*.999)*300);
+    if(dd>.6&&!rest) blink(80);
+  }
+  if(GZ.glAt>0&&CK.simT>=GZ.glAt){ GZ.tx=GZ.fx; GZ.ty=GZ.fy; GZ.glAt=-1; }
+}
+function tick(){            // one fixed 60 Hz step of the whole motion model
+  for(let i=0;i<ALL.length;i++) save(ALL[i]); CK.prevNT=CK.noiseT;
+  const dt=STEP; CK.simT+=dt;
+  if(!forced&&!still){
+    if(CK.simT>=nextGlance){
+      if(!RM&&CK.simT-CK.pointerAt>2500&&happy.x<.15&&!pet.down){const home=Math.random()<.45; yaw.t=home?0:(Math.random()*2-1)*.36; pitch.t=home?0:(Math.random()*2-1)*.2;}
+      nextGlance=CK.simT+1800+Math.random()*2600;
+    }
+    if(CK.simT>=nextBlink){ blink(); if(Math.random()<.18) doubleAt=CK.simT+260; nextBlink=CK.simT+2800+Math.random()*3400; }
+    if(doubleAt>0&&CK.simT>=doubleAt){ blink(); doubleAt=-1; }
+  }
+  petTick(dt);
+  breathTick();
+  // blink: the lid comes down from the top; happy: a soft squint (face.js eyeShapeV)
+  lid.t=(CK.simT<blinkUntil)?0:1-.5*Math.max(0,Math.min(1,happy.x));
+  step(yaw);step(pitch);step(size);step(lid);
+  if(!forced){ pupX.t=yaw.t; pupY.t=pitch.t; step(pupX); step(pupY); }
+  pupilLife();
+  blinkLife();
+  // glass follows the pose from LAG ms ago on a heavier, softer spring (eyes lead)
+  if(hLen===HN){h0=(h0+1)%HN;hLen--;}
+  const hi=(h0+hLen)%HN; hT[hi]=CK.simT; hY[hi]=yaw.x; hP[hi]=pitch.x; hLen++;
+  while(hLen>1&&hT[(h0+1)%HN]<=CK.simT-T.lag){h0=(h0+1)%HN;hLen--;}
+  gYaw.k=gPitch.k=T.gk; gYaw.d=gPitch.d=T.gd;
+  if(!forced){ gYaw.t=hY[h0]; gPitch.t=hP[h0]; step(gYaw); step(gPitch); }
+  if(!still){
+    const sp=T.dSpeed*(RM?.3:1);
+    for(let di=0;di<3;di++){ const d=drifts[di];
+      if(CK.simT>d.next){
+        const A=d.amp, m=T.dAmt;
+        d.x.t=(Math.random()*2-1)*A.t*m; d.y.t=(Math.random()*2-1)*A.t*.8*m;
+        d.sx.t=1+(Math.random()*2-1)*A.s*m; d.sy.t=1+(Math.random()*2-1)*A.s*m; d.r.t=(Math.random()*2-1)*A.r*m;
+        d.next=CK.simT+(2600+Math.random()*3200)/Math.max(.05,sp);
+      }
+      stepScaled(d.x,sp);stepScaled(d.y,sp);stepScaled(d.sx,sp);stepScaled(d.sy,sp);stepScaled(d.r,sp);
+    }
+    CK.noiseT+=dt/1000*sp;
+    if(CK.noiseT>=NT_WRAP){CK.noiseT-=NT_WRAP; CK.prevNT-=NT_WRAP;}   // seamless (periodic noise)
+  }
+}
+const EYE={hw:.5,hh:.5,fade:.5,oy:.5,vtop:.5,ck:.5,asx:.5,asy:.5,cut:.5,cutk:.5,nLx:.5,nLy:.5,nRx:.5,nRy:.5}, EYO={hw:.5,hh:.5,fade:.5,oy:.5,vtop:.5,ck:.5,asx:.5,asy:.5,cut:.5,cutk:.5,nLx:.5,nLy:.5,nRx:.5,nRy:.5},
+      EV3=new Float64Array(8), PA={x:.5,y:.5,z:.5}, PB={x:.5,y:.5,z:.5}, PJ=new Float64Array(8),
+      TBOX={hw:.5,hh:.5,oy:.5}, TOPEN={hw:.5,hh:.5}, TK={rim:.5,pupil:.5,follow:.5,dil:.5,stretch:.5,sdx:.5,sdy:.5},
+      TO={rs:.5,rpo:.5,rpu:.5,a:.5,b:.5,pin:.5,pu:.5,pv:.5,m0:.5,m1:.5,m3:.5,ms:.5,cuL:.5,cvL:.5,cuR:.5,cvR:.5};
+const EL=F.EYE;
+/* uniform staging: preallocated Float32Arrays + uniform*fv. Passing doubles straight to gl.uniform4f boxes
+   each argument (a heap number per value per frame); writing into typed arrays doesn't allocate at all. */
+const F32=n=>new Float32Array(n);
+const vEyeA=F32(4), vShapeC=F32(4), vAsym=F32(4), vCutN=F32(4), vLat=F32(4), vShadow=F32(4), vToon=F32(4), vRimP=F32(4), vPupil=F32(4), vPupilA=F32(4), mPupil=F32(4), vPupilC=F32(4), vRot=F32(4), vFace=F32(4), vEyeP=F32(4), vEyeL=F32(4), vEyeR=F32(4), vEyeK=F32(4), vEyeK2=F32(4), vQ=F32(4),
+      vFrost=F32(4), vPoolK=F32(4), vFringeK=F32(4), vMisc=F32(4), vTouch=F32(4), vNT=F32(1), vWarp=F32(1), mBody=F32(4),
+      mBlob=[F32(4),F32(4),F32(4)], vBlobC=[F32(2),F32(2),F32(2)];
+const LOG2E=Math.LOG2E, gk=w=>-LOG2E/(w*w);                 // gauss(x,w)=exp2(x²·gk(w))
+/* blob table (floor, pool, bloom): centre + radii; radii.y may depend on pool height ph */
+const BLOB_C=[[108,186],[120,222],[140,128]];
+const blobR=(i,ph)=>i===0?56*(1+(ph-1)*.5):i===1?196*ph:52, BLOB_RX=[82,136,70];
+
+/* CK.alpha = a ∈ [0,1): how far into the next 60 Hz step this frame is → interpolated, so 120 Hz is smooth.
+   Everything constant across the frame is computed here, not per pixel. No allocations (verified with
+   the CDP heap sampler: see bench notes). */
+function pushUniforms(){
+  const a=CK.alpha;
+  const Y=at(yaw,a), P=at(pitch,a), gy=at(gYaw,a), gp=at(gPitch,a), Rl=at(roll,a);
+  const cy=Math.cos(Y),sy=Math.sin(Y),cp=Math.cos(P),sp=Math.sin(P),cr=Math.cos(Rl),sr=Math.sin(Rl);
+  vRot[0]=cy; vRot[1]=sy; vRot[2]=cp; vRot[3]=sp; gl.uniform4fv(U.uRot,vRot);
+  vFace[0]=cr; vFace[1]=sr; gl.uniform4fv(U.uFace,vFace);
+  // eye box (face.js eyeShapeV: size, blink lid, happy squint, 3/4 asymmetry, expression lids) + happy lift/arc
+  const hp=Math.max(0,Math.min(1,at(happy,a))), lift=.035*hp, arc=.15*hp;
+  EV3[0]=at(size,a)*T.eyeScale; EV3[1]=at(lid,a); EV3[2]=0; EV3[3]=hp; EV3[4]=T.lopsided;
+  EV3[5]=T.lidSad; EV3[6]=T.lidAngry; EV3[7]=T.lidTired; F.eyeShapeV(EYE,EV3);   // expression lids (debug)
+  const ehw=EYE.hw, ehh=EYE.hh, efade=EYE.fade, lonR=EL.lon;
+  vEyeA[0]=Math.max(ehw,.004); vEyeA[1]=Math.max(ehh,.004); vEyeA[2]=1/vEyeA[0]; vEyeA[3]=1/vEyeA[1]; gl.uniform4fv(U.uEyeA,vEyeA);
+  const eoy=EYE.oy;
+  vShapeC[0]=eoy; vShapeC[1]=EYE.vtop; vShapeC[2]=EYE.ck; vShapeC[3]=lonR; gl.uniform4fv(U.uShapeC,vShapeC);
+  vAsym[0]=EYE.asx; vAsym[1]=EYE.asy; vAsym[2]=EYE.cut; vAsym[3]=EYE.cutk; gl.uniform4fv(U.uAsym,vAsym);   // 3/4 asymmetry + lid line
+  vCutN[0]=EYE.nLx; vCutN[1]=EYE.nLy; vCutN[2]=EYE.nRx; vCutN[3]=EYE.nRy; gl.uniform4fv(U.uCutN,vCutN);
+  // fixed lattice warp: 1/k per bottom-row column
+  vLat[0]=1/EL.lki; vLat[1]=1/EL.lkm; vLat[2]=1/EL.lko; vLat[3]=1/(1.4*Math.max(ehw,1e-4)); gl.uniform4fv(U.uLat,vLat);
+  const w=.8*T.eyeSoft+.4, ihw=1/Math.max(ehw,1e-4);
+  // toon layer (face.js toonV): rim + pupils; open boxes (lid 1) size the pupils so a blink/squint covers them
+  const tr=T.tRim?1:0, tp=T.tPupil?1:0;
+  vToon[0]=tr; vToon[1]=tp;
+  if(tr+tp>0){
+    EV3[1]=1; F.eyeShapeV(EYO,EV3);
+    TBOX.hw=ehw; TBOX.hh=ehh; TBOX.oy=eoy; TOPEN.hw=EYO.hw; TOPEN.hh=EYO.hh;
+    TK.rim=T.rimK; TK.pupil=T.pupilK; TK.follow=T.pupilF;
+    TK.dil=at(pupD,a); TK.stretch=at(pStr,a); TK.sdx=PSV.dx; TK.sdy=PSV.dy;          // pupil life
+    F.toonV(TO,TBOX,TOPEN,at(pupX,a)/.5,at(pupY,a)/.34,TK);
+    vRimP[0]=TO.rpo; vRimP[1]=TO.rpu; vRimP[2]=TO.rs; gl.uniform4fv(U.uRimP,vRimP);
+    vPupil[0]=TO.pin; vPupil[1]=TO.pu; vPupil[2]=TO.pv; vPupil[3]=TO.ms; gl.uniform4fv(U.uPupil,vPupil);
+    mPupil[0]=TO.m0; mPupil[1]=TO.m1; mPupil[2]=TO.m1; mPupil[3]=TO.m3; gl.uniformMatrix2fv(U.uPupilM,false,mPupil);
+    vPupilC[0]=TO.cuL; vPupilC[1]=TO.cvL; vPupilC[2]=TO.cuR; vPupilC[3]=TO.cvR; gl.uniform4fv(U.uPupilC,vPupilC);   // containment
+    vPupilA[0]=TO.a; vPupilA[1]=TO.b; vPupilA[2]=1/TO.a; vPupilA[3]=1/TO.b; gl.uniform4fv(U.uPupilA,vPupilA);
+  }
+  gl.uniform4fv(U.uToon,vToon);
+  // drop shadow: offset ≈7% and Gaussian width ≈10% of the eye width (well inside the capsule margin below)
+  vShadow[0]=T.eyeShadow; vShadow[1]=.14*ehw; vShadow[2]=gk(Math.max(.2*ehw*RR,.5)); gl.uniform4fv(U.uShadow,vShadow);
+  /* tight bounding capsule per eye: the projected eye axis (cap ends) + radius. Projection never enlarges
+     distances (screen ≤ RR·angle), the happy arc droops ≤ arc·hw, and the margin is where glow + aura fall under
+     ~0.5/255. Asymmetry: one eye up to (1+asx) wider and offset ±asy → widen the radius, lengthen the axis */
+  const lat0=EL.lat+lift, mg=(1.5+2.4*(3.5+2.5*w))/.8;
+  const asx=Math.abs(EYE.asx), asy=Math.abs(EYE.asy);
+  const crad=EYE.hw*(1+asx), ccap=Math.max(0,EYE.hh-crad)+asy;
+  vEyeP[2]=efade; vEyeP[3]=(crad+arc*crad)*RR+1+mg;
+  if(tr>0){ const reach=(Math.hypot(TO.rpo,TO.rpu)+(TO.rs-1)*Math.max(ehw,ehh))*RR+2;   // the rim pokes out: grow the capsule if needed
+    if(reach>mg) vEyeP[3]+=reach-mg; }
+  gl.uniform4fv(U.uEyeP,vEyeP);
+  PJ[0]=cy; PJ[1]=sy; PJ[2]=cp; PJ[3]=sp; PJ[4]=cr; PJ[5]=sr;
+  for(let s2=-1;s2<=1;s2+=2){
+    PJ[6]=s2*lonR; PJ[7]=lat0+eoy+ccap; F.projectV(PA,PJ); PJ[7]=lat0+eoy-ccap; F.projectV(PB,PJ);
+    const v=s2<0?vEyeL:vEyeR; v[0]=PA.x; v[1]=PA.y; v[2]=PB.x; v[3]=PB.y; gl.uniform4fv(s2<0?U.uEyeL:U.uEyeR,v);
+  }
+  vEyeK[0]=w; vEyeK[1]=gk(4+3*w); vEyeK[2]=gk(3.5+2.5*w); vEyeK[3]=ihw; gl.uniform4fv(U.uEyeK,vEyeK);
+  vEyeK2[0]=1/(2*ehh+1e-4); vEyeK2[1]=-ehw*RR*.7; vEyeK2[2]=lat0; vEyeK2[3]=arc*ihw; gl.uniform4fv(U.uEyeK2,vEyeK2);
+
+  // head turn: INVERTED to the gaze, foreshortened at the side, plus the petting drag → q = pl·xy + zw
+  const gsy=Math.sin(gy), gsp=Math.sin(gp), k=RR*T.follow;
+  const ox=-gsy*k+at(dragX,a), oy=-gsp*Math.cos(gy)*k+at(dragY,a), isx=1/(1-.16*Math.abs(gsy)), isy=1/(1-.16*Math.abs(gsp));
+  vQ[0]=isx; vQ[1]=isy; vQ[2]=120-(120+ox)*isx; vQ[3]=120-(120+oy)*isy; gl.uniform4fv(U.uQ,vQ);
+  // blobs: drift⁻¹ (rotate·scale about the drift origin + translate) with 1/radii folded in
+  // breathing: blobs scale about their own centres (pool also rises a touch); bloom on its lagging spring
+  const bA=.055*T.bDepth, bb=at(breath,a)*bA, bl=at(breathL,a)*bA;
+  const ph=T.poolH*(1+.35*bb);
+  for(let i=0;i<3;i++){
+    const d=drifts[i], ang=at(d.r,a)*Math.PI/180, c=Math.cos(ang), s=Math.sin(ang), ix=1/at(d.sx,a), iy=1/at(d.sy,a);
+    const otx=120+at(d.x,a)*BOX, oty=144.8+at(d.y,a)*BOX, bs=1/(1+(i===2?1.2*bl:bb)), rx=bs/BLOB_RX[i], ry=bs/blobR(i,ph);
+    const a0=c*ix, a1=-s*iy, a2=s*ix, a3=c*iy;                // column-major M⁻¹
+    const m=mBlob[i], cv2=vBlobC[i];
+    m[0]=a0*rx; m[1]=a1*ry; m[2]=a2*rx; m[3]=a3*ry;
+    gl.uniformMatrix2fv(i===0?U.uBA:i===1?U.uBB:U.uBC,false,m);
+    cv2[0]=(120-BLOB_C[i][0]-(a0*otx+a2*oty))*rx; cv2[1]=(144.8-BLOB_C[i][1]-(a1*otx+a3*oty))*ry;
+    gl.uniform2fv(i===0?U.uCA:i===1?U.uCB:U.uCC,cv2);
+  }
+  const ck=CK; vNT[0]=ck.prevNT+(ck.noiseT-ck.prevNT)*a; gl.uniform1fv(U.uNT,vNT);
+  vWarp[0]=6*T.dAmt; gl.uniform1fv(U.uWarp,vWarp);
+  const es=T.edge;
+  vFrost[0]=gk(10*es+3); vFrost[1]=118-6*es-1; vFrost[2]=118+5*es+1; vFrost[3]=Math.max(118-4+2.5*(10*es+3),118+12); gl.uniform4fv(U.uFrost,vFrost);
+  vPoolK[0]=30*es; vPoolK[1]=14*es; vPoolK[2]=10*es; vPoolK[3]=6*es+2; gl.uniform4fv(U.uPoolK,vPoolK);
+  vFringeK[0]=gk(5*es+2.5); vFringeK[1]=gk(4+3*es); vFringeK[2]=T.fringe; vFringeK[3]=T.haze; gl.uniform4fv(U.uFringeK,vFringeK);
+  vMisc[0]=T.poolI*(1+.9*bb); vMisc[1]=T.split*(1-.3*coatDark); vMisc[2]=gk(34); vMisc[3]=T.dent; gl.uniform4fv(U.uMisc,vMisc);
+  // petting: contact (pressure sprung in/out) + squash/stretch along the stroke, inverse matrix
+  vTouch[0]=at(tX,a); vTouch[1]=at(tY,a); vTouch[2]=Math.max(0,at(press,a)); gl.uniform4fv(U.uTouch,vTouch);
+  const ba=at(bodyA,a), ux=pet.bx, uy=pet.by, sa=1/(1+ba), sb=1/Math.max(.5,1-.6*ba);   // stretch along, squash across
+  mBody[0]=sa*ux*ux+sb*uy*uy; mBody[1]=(sa-sb)*ux*uy; mBody[2]=mBody[1]; mBody[3]=sa*uy*uy+sb*ux*ux;
+  gl.uniformMatrix2fv(U.uBodyM,false,mBody);
+}
+
+/* ---------------- single rAF loop (paused when hidden or context lost) ---------------- */
+let raf=0,fpsN=0,fpsT=0,fps=0;
+/* adaptive quality: 3 slow windows (<52 fps) → try 85% resolution. If that doesn't buy ≥8% fps the
+   limit is vsync (30 Hz screens, iOS Low Power) or CPU, so undo it and stop adapting. Never climbs back. */
+const adapt=!Q.has('noadapt'); let slow=0, probe=null, adaptOff=!adapt, windows=0;
+function adaptStep(){
+  if(adaptOff||document.hidden||++windows<4) return;        // skip the first ~1.5 s (compile, page jank)
+  if(probe){
+    probe.sum+=fps; if(++probe.n<3) return;
+    if(probe.sum/3<probe.fps*1.08){ rscale=probe.scale; adaptOff=true; needResize=true; }
+    probe=null; return;
+  }
+  slow=fps<52?slow+1:0;
+  if(slow>=3&&rscale>.5){ probe={fps,scale:rscale,sum:0,n:0}; rscale=Math.max(.5,rscale*.85); slow=0; needResize=true; }
+}
+function frame(now){
+  raf=requestAnimationFrame(frame);
+  if(lost) return;
+  if(needResize) resize();
+  const c=CK; if(!c.last) c.last=now;
+  c.acc+=Math.min(now-c.last,100); c.last=now;
+  let n=0; while(c.acc>=STEP&&n<6){tick();c.acc-=STEP;n++;}
+  if(c.acc>=STEP) c.acc=0;                                   // fell far behind: drop, don't spiral
+  c.alpha=c.acc/STEP; pushUniforms();
+  draw();
+  fpsN++; if(now-fpsT>=500){
+    fps=fpsN*1000/(now-fpsT);fpsN=0;fpsT=now; adaptStep();
+    if(fpsEl&&dbg.classList.contains('on')) fpsEl.textContent=fps.toFixed(0)+' fps · '+W+'×'+H+(rscale<1?' · '+Math.round(rscale*100)+'%':'');
+  }
+}
+function start(){ if(!raf&&!lost&&!document.hidden){CK.last=0;CK.acc=0;fpsN=0;fpsT=performance.now();slow=0;probe=null;raf=requestAnimationFrame(frame);} }
+function stop(){ if(raf){cancelAnimationFrame(raf);raf=0;} }
+document.addEventListener('visibilitychange',()=>document.hidden?stop():start());
+cv.addEventListener('webglcontextlost',e=>{ e.preventDefault(); lost=true; stop(); },false);
+cv.addEventListener('webglcontextrestored',()=>{
+  lost=false;
+  if(!initGL()){ toFallback('WebGL context could not be restored'); return; }
+  resize(); applyCoat(); start();
+},false);
+
+/* ---------------- debug panel ---------------- */
+const dbg=$('dbg'); let fpsEl=null;
+function buildDebug(){
+  dbg.innerHTML='<h4>ASTRID · SOLO <b id="fps">– fps</b></h4>';
+  TOGGLES.forEach(([key,label])=>{
+    const l=document.createElement('label'); l.className='chk'; l.dataset.k=key;
+    l.innerHTML=`<span>${label}</span><input type="checkbox">`; const c=l.querySelector('input'); c.checked=!!T[key];
+    c.onchange=()=>{T[key]=c.checked?1:0; store.set(TUNE_KEY,JSON.stringify(T));}; dbg.appendChild(l);
+  });
+  SLIDERS.forEach(([key,label,min,max,st])=>{
+    const l=document.createElement('label');
+    l.innerHTML=`<span>${label}</span><span></span><input type="range" min="${min}" max="${max}" step="${st}">`;
+    const inp=l.querySelector('input'), val=l.querySelectorAll('span')[1];
+    const show=()=>{val.textContent=(+T[key]).toFixed(st<.01?3:st<1?2:0);};
+    inp.value=T[key]; show();
+    inp.oninput=()=>{T[key]=+inp.value; show(); store.set(TUNE_KEY,JSON.stringify(T)); if(key==='edge') needResize=true;};
+    l.dataset.k=key; dbg.appendChild(l);
+  });
+  const row=document.createElement('div'); row.className='row';
+  row.innerHTML='<button type="button" id="dReset">Reset</button><button type="button" id="dCopy">Copy values</button>';
+  dbg.appendChild(row);
+  $('dReset').onclick=()=>{T=Object.assign({},TUNE_DEF);store.del(TUNE_KEY);buildDebug();needResize=true;};
+  $('dCopy').onclick=()=>{
+    const txt=JSON.stringify(T,null,2), btn=$('dCopy');
+    const ok=()=>{btn.textContent='Copied ✓';setTimeout(()=>btn.textContent='Copy values',1200);};
+    const legacy=()=>{
+      const ta=document.createElement('textarea');ta.value=txt;ta.setAttribute('readonly','');ta.style.cssText='position:fixed;opacity:0';
+      document.body.appendChild(ta);ta.select();let done=false;
+      try{done=document.execCommand('copy');}catch(e){}
+      ta.remove(); done?ok():prompt('Tuning JSON',txt);
+    };
+    if(navigator.clipboard&&window.isSecureContext) navigator.clipboard.writeText(txt).then(ok,legacy); else legacy();
+  };
+  fpsEl=$('fps');
+}
+['pointerdown','click','pointermove'].forEach(t=>dbg.addEventListener(t,e=>e.stopPropagation()));
+buildDebug();
+if(Q.has('debug')) dbg.classList.add('on');
+addEventListener('keydown',e=>{
+  if(e.key!=='d'||e.repeat||e.metaKey||e.ctrlKey||e.altKey) return;
+  const t=e.target; if(t&&(t.isContentEditable||t.tagName==='TEXTAREA'||(t.tagName==='INPUT'&&t.type!=='range'))) return;
+  dbg.classList.toggle('on');
+});
+
+resize();
+applyCoat();
+if(!Q.has('seed')) start();   // seed = scripted test mode: static until __astrid.drive()
+/* bench: n synchronous draws with a 1-px readback → ms per frame (renderer cost only) */
+function bench(n){n=n||60;const was=!!raf;stop();(CK.alpha=0,pushUniforms());draw();gl.finish();const t0=performance.now();
+  const px=new Uint8Array(4);for(let i=0;i<n;i++){tick();(CK.alpha=0,pushUniforms());draw();gl.readPixels(0,0,1,1,gl.RGBA,gl.UNSIGNED_BYTE,px);} const ms=(performance.now()-t0)/n; if(was)start(); return ms;}
+/* test hook: drive(steps) runs the real 60 Hz sim with scripted pointer input, one [down,x,y] (units) per
+   tick, then draws once. Deterministic with ?seed. Used to compare frames pixel-for-pixel across builds.
+   down = 2: hover (pointer-follow only, no petting). */
+function driveSteps(steps,rec){
+  const cl=v=>Math.max(-1,Math.min(1,v));
+  for(let i=0;i<steps.length;i++){
+    const dn=steps[i][0], x=steps[i][1], y=steps[i][2];
+    if(dn===2){ yaw.t=cl((x-120)/170)*.5; pitch.t=cl((y-120)/170)*.34; CK.pointerAt=CK.simT; tick(); if(rec) rec.push(recRow()); continue; }   // hover: pointer-follow only
+    if(dn&&!pet.down){ Object.assign(pet,{down:true,id:-2,x,y,px:x,py:y,lx:0,ly:0,path:0,downAt:CK.simT}); pet.revs.length=0; }
+    else if(!dn&&pet.down) pet.down=false;
+    if(dn){ pet.path+=Math.hypot(x-pet.x,y-pet.y); pet.x=x; pet.y=y; yaw.t=cl((x-120)/170)*.5; pitch.t=cl((y-120)/170)*.34; CK.pointerAt=CK.simT; }
+    tick();
+    if(rec) rec.push(recRow());
+  }
+}
+const recRow=()=>[+breath.x.toFixed(4),+happy.x.toFixed(3),+size.x.toFixed(4),+lid.x.toFixed(4),+yaw.x.toFixed(4),+pitch.x.toFixed(4),+pupD.x.toFixed(4),+pStr.x.toFixed(4),+pupX.x.toFixed(4),+pupY.x.toFixed(4)];
+function drive(steps){
+  stop(); driveSteps(steps,null);
+  return new Promise(res=>requestAnimationFrame(()=>{ if(needResize) resize(); (CK.alpha=0,pushUniforms()); draw(); requestAnimationFrame(()=>res(CK.simT)); }));
+}
+/* test hook: trace(steps) runs the same scripted sim without drawing → per tick [breath, content, size, lid, yaw, pitch,
+   pupil dilation, pupil stretch, pupil x, pupil y] */
+const trace=steps=>{stop(); const r=[]; driveSteps(steps,r); return JSON.stringify(r);};
+window.__astrid={drive,trace,bench,blinkNow:()=>blink(),holdBlinks:v=>{ nextBlink=v?1e12:CK.simT+800; },snapLid:v=>snap(lid,v),kick:()=>{pushUniforms(); draw();},
+  toon:()=>({a:1,px:pupX.x,py:pupY.x,yaw:yaw.x,pitch:pitch.x,dil:pupD.x,stretch:pStr.x,armed:PSV.armed,sdx:PSV.dx,sdy:PSV.dy,contain:[TO.cuL,TO.cvL,TO.cuR,TO.cvR]}),
+  pet:()=>({down:pet.down,content:pet.content,happy:happy.x,lid:lid.x,roll:roll.x,press:press.x,body:bodyA.x,breath:breath.x,revs:pet.revs.length,lastTickle:pet.lastTickle,simT:CK.simT,voice:Voice.stats()}),
+  get T(){return T},coat:()=>({name:COAT,dark:DARK}),pose:()=>({yaw:yaw.x,pitch:pitch.x,size:size.x,lid:lid.x,gYaw:gYaw.x,gPitch:gPitch.x}),fps:()=>fps,rscale:()=>rscale};
+})();
+</script>
+</body>
+</html>
