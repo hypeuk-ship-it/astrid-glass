@@ -17,9 +17,11 @@
   .stage{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
   html,body{overscroll-behavior:none}
   .coats{position:fixed;left:0;right:0;bottom:22px;display:flex;justify-content:center;gap:10px;align-items:center}
+  .coats button{width:22px;height:22px;border-radius:50%;border:1px solid rgba(0,0,0,.15);cursor:pointer;padding:0;outline-offset:3px}
+  .coats button[data-c][aria-pressed=true]{outline:1.5px solid var(--ink)}
   #dbg label.chk{grid-template-columns:1fr auto}
   #dbg label.chk input{grid-column:auto;width:auto;height:auto}
-  .coats .snd{border:1px solid;cursor:pointer;outline-offset:3px;width:auto;height:22px;border-radius:11px;padding:0 10px;background:transparent;color:var(--ink);font:inherit;border-color:currentColor;opacity:.7}
+  .coats .mode,.coats .snd{width:auto;height:22px;border-radius:11px;padding:0 10px;background:transparent;color:var(--ink);font:inherit;border-color:currentColor;opacity:.7}
   /* debug panel (?debug or press d) */
   #dbg{position:fixed;top:12px;right:12px;width:236px;padding:10px 12px 12px;border-radius:12px;background:rgba(18,20,28,.82);color:#e8ecf4;
        font:500 11px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);display:none;z-index:5;box-shadow:0 6px 24px rgba(0,0,0,.25);max-height:calc(100vh - 24px);overflow-y:auto;overscroll-behavior:contain}
@@ -351,13 +353,13 @@ void main(){
   gl_Position = vec4(aPos, 0.0, 1.0);
 }
 </script>
-<script src="coats.js?v=10081240"></script>
-<script src="springs.js?v=10081240"></script>
-<script src="face.js?v=10081240"></script>
+<script src="coats.js?v=10081245"></script>
+<script src="springs.js?v=10081245"></script>
+<script src="face.js?v=10081245"></script>
 <script>
 (function(){
 'use strict';
-const {palette,rgb}=AstridCoats;
+const {palette,swatch,rgb}=AstridCoats;
 const {spring,step,stepScaled,snap,save,at}=AstridSprings;
 const F=AstridFace, RR=F.RR;
 const $=id=>document.getElementById(id);
@@ -499,11 +501,17 @@ if(window.ResizeObserver) new ResizeObserver(()=>{needResize=true;}).observe(sta
   mq.addEventListener?mq.addEventListener('change',on):mq.addListener(on);
 })();
 
-/* ---------------- coat: ColorWay carbon (read-only, coats.js; identical in light and dark) ---------------- */
-const COAT='carbon', DARK=false;
+/* ---------------- coats (read-only ColorWay + glass, coats.js): carbon (default) and glass, light / dark ---------------- */
+const SOLO_COATS=['glass','carbon'], COAT_KEY='astridSoloCoat';   // swatch order as in the full rig; carbon = default; glass = Henlo's white/blue vibe
+const qCoat=Q.get('coat'), qMode=Q.get('mode');          // test hooks (not persisted)
+let state=null; try{state=JSON.parse(store.get(COAT_KEY)||'null')}catch(e){}
+if(!state||typeof state!=='object'||!SOLO_COATS.includes(state.name)) state={name:'carbon',dark:false};
+state={name:state.name,dark:!!state.dark};
+if(qCoat&&SOLO_COATS.includes(qCoat)) state.name=qCoat;
+if(qMode) state.dark=qMode==='dark';
 const themeMeta=document.querySelector('meta[name=theme-color]'); let coatDark=0;
-function applyCoat(){
-  const p=palette(COAT,DARK), name=COAT;
+function applyCoat(name,dark,persist){
+  const p=palette(name,dark);
   document.documentElement.style.setProperty('--paper',p.paper);
   document.documentElement.style.setProperty('--ink',p.ink);
   if(themeMeta) themeMeta.content=p.paper;
@@ -523,11 +531,22 @@ function applyCoat(){
     gl.uniform3fv(U.uToonCol,rgb(toon));
     const au=mx(core,mid,.3); gl.uniform4f(U.uAura,au[0],au[1],au[2],.42*(1-.4*p.dark));
   }
-  coatDark=p.dark;
+  coatDark=palette(name,dark).dark;
+  if(persist!==false) store.set(COAT_KEY,JSON.stringify({name,dark}));
+  document.querySelectorAll('.coats button[data-c]').forEach(b=>b.setAttribute('aria-pressed',b.dataset.c===name));
+  $('modeBtn').textContent=dark?'Dark':'Light';
+  state={name,dark};
 }
 const bar=$('bar');
+SOLO_COATS.forEach(n=>{
+  const b=document.createElement('button'); b.type='button'; b.dataset.c=n;
+  b.title=b.ariaLabel=n[0].toUpperCase()+n.slice(1)+' coat'; b.setAttribute('aria-label',b.title);
+  b.style.background=swatch(n);
+  b.onclick=e=>{e.stopPropagation();applyCoat(n,state.dark)}; bar.appendChild(b);
+});
+const mb=document.createElement('button'); mb.type='button'; mb.id='modeBtn'; mb.className='mode'; mb.title='Toggle light / dark';
+mb.onclick=e=>{e.stopPropagation();applyCoat(state.name,!state.dark)}; bar.appendChild(mb);
 bar.addEventListener('pointerdown',e=>e.stopPropagation());
-
 /* ---------------- voice: tiny WebAudio synth (cute, small, a little high; WALL-E-ish scoops) ----------------
    Each chirp = triangle + soft octave sine through a moving vowel formant ("oo"→"ee") and a lowpass, with a
    pitch scoop (dip, swoop up, settle) and a quick soft envelope. Unlocks on the first user gesture only.
@@ -1008,7 +1027,7 @@ cv.addEventListener('webglcontextlost',e=>{ e.preventDefault(); lost=true; stop(
 cv.addEventListener('webglcontextrestored',()=>{
   lost=false;
   if(!initGL()){ toFallback('WebGL context could not be restored'); return; }
-  resize(); applyCoat(); start();
+  resize(); applyCoat(state.name,state.dark,false); start();
 },false);
 
 /* ---------------- debug panel ---------------- */
@@ -1056,7 +1075,7 @@ addEventListener('keydown',e=>{
 });
 
 resize();
-applyCoat();
+applyCoat(state.name,state.dark,!(qCoat||qMode));
 if(!Q.has('seed')) start();   // seed = scripted test mode: static until __astrid.drive()
 /* bench: n synchronous draws with a 1-px readback → ms per frame (renderer cost only) */
 function bench(n){n=n||60;const was=!!raf;stop();(CK.alpha=0,pushUniforms());draw();gl.finish();const t0=performance.now();
@@ -1087,7 +1106,7 @@ const trace=steps=>{stop(); const r=[]; driveSteps(steps,r); return JSON.stringi
 window.__astrid={drive,trace,bench,blinkNow:()=>blink(),holdBlinks:v=>{ nextBlink=v?1e12:CK.simT+800; },snapLid:v=>snap(lid,v),kick:()=>{pushUniforms(); draw();},
   toon:()=>({a:1,px:pupX.x,py:pupY.x,yaw:yaw.x,pitch:pitch.x,dil:pupD.x,stretch:pStr.x,armed:PSV.armed,sdx:PSV.dx,sdy:PSV.dy,contain:[TO.cuL,TO.cvL,TO.cuR,TO.cvR]}),
   pet:()=>({down:pet.down,content:pet.content,happy:happy.x,lid:lid.x,roll:roll.x,press:press.x,body:bodyA.x,breath:breath.x,revs:pet.revs.length,lastTickle:pet.lastTickle,simT:CK.simT,voice:Voice.stats()}),
-  get T(){return T},coat:()=>({name:COAT,dark:DARK}),pose:()=>({yaw:yaw.x,pitch:pitch.x,size:size.x,lid:lid.x,gYaw:gYaw.x,gPitch:gPitch.x}),fps:()=>fps,rscale:()=>rscale};
+  get T(){return T},state:()=>state,pose:()=>({yaw:yaw.x,pitch:pitch.x,size:size.x,lid:lid.x,gYaw:gYaw.x,gPitch:gPitch.x}),fps:()=>fps,rscale:()=>rscale};
 })();
 </script>
 </body>
