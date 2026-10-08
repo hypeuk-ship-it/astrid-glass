@@ -70,6 +70,8 @@ uniform vec4  uScr;     // on (0/1), inset margin (rad), text brightness 0…1, 
 uniform vec4  uScrM;    // text frame: top v (rad, rel. to eye centre), S (tex units per rad), scanlines per screen, scanline depth
 uniform vec4  uScrK;    // vignette width (rad), bg lift, bg mix (pupil ink → screen bg), -
 uniform vec3  uScrBg;   // screen background (dark)
+uniform vec4  uBrow;    // emotion brows: raise (rad), inner-end offset (rad, + = inner up), weight, half-thickness
+uniform vec4  uEmo;     // heart 0..1, warm 0..1, pupil width scale (1 = round), smile glow 0..1
 
 const vec2  C  = vec2(120.0, 120.0);
 const float R  = 118.0;   // orb
@@ -113,6 +115,14 @@ float eyeSDF(vec2 p, vec2 b, float side, vec3 rp){
   return smax(d, pl.y - uShapeC.y, uShapeC.z) * min(sx, 1.0);
 }
 
+// filled heart (iq), point down, roughly x ±0.6, y 0..1.1. Used for the love pupil.
+float sdHeart(vec2 p){
+  p.x = abs(p.x);
+  if (p.y + p.x > 1.0) return length(p - vec2(0.25, 0.75)) - 0.353553;
+  return sqrt(min(dot(p - vec2(0.0, 1.0), p - vec2(0.0, 1.0)),
+                  dot(p - vec2(1.0, 0.0), p - vec2(1.0, 0.0)))) * sign(p.x - p.y);
+}
+
 // pupil coverage (unclipped), computed by the centre tap (always called first) and reused by the two side
 // taps: the pupil is painted INTO each tap's white colour, so the white's own edge clips it (one AA edge, no
 // seam against the rim behind, no light line) and the pupil itself never gets an RGB split. gFillMax = the union
@@ -132,7 +142,8 @@ vec3 eyeTap(vec3 col, float lon, float lat, float Z, float rimA, float pc){
   float vis = uEyeP.z * smoothstep(0.02, 0.08, Z);            // lidFade · z>0.02 cull
   float dsp = max(ds, 0.0);
   float gv = vis * (1.0 - abs(rimA));                              // the rim stays crisp (no glow over it)
-  col = tint(col, uGlow, 0.26 * g2(dsp, uEyeK.y) * gv);       // soft luminous glow
+  vec3 glowC = mix(uGlow, vec3(1.0, 0.58, 0.74), clamp(uEmo.y, 0.0, 1.0));
+  col = tint(col, glowC, 0.26 * (1.0 + 0.95 * uEmo.w + 0.4 * uEmo.y) * g2(dsp, uEyeK.y) * gv);
   col = mix(col, uAura.rgb, uAura.a * g2(dsp - 1.5, uEyeK.z) * gv);    // pool-coloured aura
   // pebble fill: bright top-right → eye colour → faint shade lower-left, plus a soft inner edge shade
   float uu = clamp(u * uEyeK.w * 0.5 + 0.5, 0.0, 1.0);
@@ -141,16 +152,20 @@ vec3 eyeTap(vec3 col, float lon, float lat, float Z, float rimA, float pc){
   vec3 ec  = t < 0.5 ? mix(uEyeHi, uEye, t * 2.0) : mix(uEye, uEyeLo, 0.55 * smoothstep(0.55, 1.0, t));
   float rimShade = smoothstep(uEyeK2.y, 0.0, ds) * smoothstep(0.3, 0.9, t);
   ec = mix(ec, uEyeLo, 0.4 * rimShade);
+  ec = mix(ec, vec3(1.0), 0.22 * uEmo.w);                              // happy: brighter white
+  ec = mix(ec, vec3(1.0, 0.80, 0.86), 0.38 * uEmo.y);                  // love: warm white
   // pupil: upright oval; soft containment (CPU) keeps it inside the white; lids cover it. Centre tap evaluates,
   // side taps reuse its coverage.
   if (uToon.y > 0.0 && pc > 0.5) {
     float psx = 1.0 + side * uAsym.x;
     vec2 pc2 = side < 0.0 ? uPupilC.xy : uPupilC.zw;
     vec2 pq = uPupilM * vec2(u / psx + side * uPupil.x - uPupil.y - pc2.x, v + side * uAsym.y - uPupil.z - pc2.y);
+    float nw = max(uEmo.z, 0.3);                               // < 1 narrows the pupil (angry)
+    pq.x /= nw;
     vec2 p0 = pq * uPupilA.zw, p1 = p0 * uPupilA.zw;           // gradient-normalised ellipse
     float pk = length(p0);
     float dp = pk * (pk - 1.0) * inversesqrt(max(dot(p1, p1), 1e-8));
-    dp *= min(psx, 1.0) * uPupil.w * RR * (0.5 * Z + 0.5);
+    dp *= min(psx, 1.0) * uPupil.w * nw * RR * (0.5 * Z + 0.5);
     vec3 pcol = uToonCol;
     if (uScr.x > 0.0) {
       // the screen: pupil ∩ eye outline. uScr.y ≤ 0 pushes the clip past the white so the sclera is gone;
@@ -167,9 +182,17 @@ vec3 eyeTap(vec3 col, float lon, float lat, float Z, float rimA, float pc){
            + tx * (uScr.z * uScr.w * vig * (1.0 - uScrM.w * sl));
       gScrC = pcol;
     }
-    gCovP = uToon.y * (1.0 - smoothstep(-w, w, dp));
+    float cover = 1.0 - smoothstep(-w, w, dp);
+    if (uScr.x < 0.5 && uEmo.x > 0.001) {
+      vec2 hn = pq * uPupilA.zw;
+      vec2 hp2 = vec2(hn.x / 1.35, hn.y / 1.35 + 0.52);       // heart fills the pupil, point down
+      float dh = sdHeart(hp2) * 1.35;
+      dh *= min(uPupilA.x, uPupilA.y) * min(psx, 1.0) * uPupil.w * RR * (0.5 * Z + 0.5);
+      cover = mix(cover, 1.0 - smoothstep(-w, w, dh), uEmo.x);
+    }
+    gCovP = uToon.y * cover;
   }
-  vec3 pcol2 = uScr.x > 0.0 ? gScrC : uToonCol;
+  vec3 pcol2 = uScr.x > 0.0 ? gScrC : mix(uToonCol, vec3(0.93, 0.16, 0.40), uEmo.x);
   ec = mix(ec, pcol2, gCovP);
   float fill = 1.0 - smoothstep(-w, w, ds);
   gFillMax = max(gFillMax, fill * vis);
@@ -239,7 +262,25 @@ vec3 eyes(vec3 col, vec2 p, vec2 off){
     // (white fill ~ 0) is untouched. gCovP still limits it to the pupil, so the shrink-back reads.
     cov = gCovP * smoothstep(0.0, 0.02, gFillMax);
   }
-  return mix(c, gScrC, cov);
+  vec3 ink = uScr.x > 0.0 ? gScrC : mix(uToonCol, vec3(0.93, 0.16, 0.40), uEmo.x);
+  c = mix(c, ink, cov);
+  // thin brow arcs sit just above the white. Screen coverage wins if they ever overlap.
+  if (uBrow.z > 0.01) {
+    float side = lon < 0.0 ? -1.0 : 1.0;
+    float u = lon - uShapeC.w * side;
+    float v = lat - uEyeK2.z + uEyeK2.w * u * u;
+    float psx = max(1.0 + side * uAsym.x, 0.2);
+    float uu = u / psx;
+    float inn = -side * uu;                                    // + toward the nose
+    float hw = uEyeA.x, hh = uEyeA.y;
+    float yb = v - (hh * 1.16 + uBrow.x + uBrow.y * inn / max(hw, 0.04) - 0.30 * uu * uu / max(hw, 0.04));
+    vec2 bq = vec2(abs(uu) - hw * 0.70, abs(yb) - uBrow.w);
+    float db = length(max(bq, 0.0)) + min(max(bq.x, bq.y), 0.0);
+    float ds = db * RR * (0.5 * Z + 0.5);
+    float bA = uBrow.z * smoothstep(0.02, 0.08, Z) * (1.0 - smoothstep(-uEyeK.x, uEyeK.x, ds));
+    c = mix(c, uToonCol, bA * (1.0 - cov));
+  }
+  return c;
 }
 
 void main(){
@@ -283,6 +324,8 @@ void main(){
     // backlit floor: just above the bottom margin the pool goes lighter + cyan (luminous, not muddy)
     float lift = smoothstep(0.55, 0.95, low) * m;
     pool = mix(pool, uLiftCol, 0.55 * lift * pa * (1.0 - uMode.y*0.5));
+    pool = mix(pool, vec3(1.0, 0.93, 0.88), 0.28 * uEmo.w * pa);          // happy: a little warmer glass
+    pool = mix(pool, vec3(1.0, 0.48, 0.66), 0.26 * uEmo.y * pa);          // love: rose in the pool
     col = mix(col, pool, m * body);
 
     // ---- haze: white veil, heavier toward the top (fixed) ----

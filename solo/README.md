@@ -16,8 +16,10 @@ Files: `index.html` (inlined shaders + rig), `glass.frag` / `glass.vert` (edit t
 `--check` verifies they match), `face.js` (eye box + toon layer), `springs.js`, `coats.js` (read-only ColorWay
 coats; only glass + carbon are offered), `v6-svg.html` (SVG fallback when WebGL is unavailable).
 
+Emotions (held until another is picked; ~300 ms springs): Happy, Sad, Angry, Surprised, Sleepy, Love, on the row above the coat bar. `?emo=happy|sad|angry|surprised|sleepy|love|neutral`. `__astrid.emotion(name)` sets one and returns the current name. Think still runs from any emotion and eases back to it afterwards. Surprised pops wide, then settles.
+
 Test hooks: `?coat=glass|carbon&mode=light|dark` (not saved), `?seed=N` (deterministic, static until `__astrid.drive()`), `?still`, `?yaw=&pitch=`, `?content=0..1`,
-`?breath=0..1`, `?noadapt`, `?demo=think`, `?think=`, `?eyes=`.
-Hooks: `__astrid.state('idle'|'listening'|'thinking'|'working'|'done')`, `__astrid.think(lines)`, `__astrid.thinkStyle`, `__astrid.thinkEyes`, `__astrid.coat()` (the coat; was `state()`).
+`?breath=0..1`, `?noadapt`, `?demo=think`, `?think=`, `?eyes=`, `?emo=`.
+Hooks: `__astrid.state('idle'|'listening'|'thinking'|'working'|'done')`, `__astrid.emotion(name)`, `__astrid.think(lines)`, `__astrid.thinkStyle`, `__astrid.thinkEyes`, `__astrid.coat()` (the coat; was `state()`).
 
 The full rig (all shapes + Polly) stays at the repo root; it is also tagged `full-rig-2026-10-07`.
