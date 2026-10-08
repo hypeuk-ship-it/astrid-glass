@@ -60,9 +60,11 @@ uniform vec4  uPoolK;   // inset at sides (30es), inset at bottom (14es), margin
 uniform vec4  uFringeK; // fringe exp2 k, outer-smear exp2 k, fringe strength, haze
 uniform vec4  uMisc;    // pool strength, chroma split scale, contact exp2 k (34u), dent strength
 uniform vec4  uTouch;   // petting contact: x, y (units), pressure (sprung), -
-// ---- thinking: pupil takeover screen (0 = off → skipped). The pupil grows into the white; where it meets the
-// white inset by a thin margin it becomes a screen: canvas2D text texture (both eyes side by side), scanlines,
-// edge vignette. Centre tap only (no RGB split on the screen, like the pupil).
+// ---- thinking: pupil takeover screen (0 = off → skipped). The pupil scales past the white and is clipped to
+// the eye outline (uScr.y ≤ 0, no sclera rim). Where it covers the white it is a screen: canvas2D text texture
+// (both eyes side by side), scanlines, edge vignette. Centre tap only (no RGB split on the screen, like the pupil).
+// A blink's lid is in the white SDF, so the lid still cuts across the screen. The dark rim crescent stays,
+// because it sits where the white fill is ~0.
 uniform sampler2D uScrT;
 uniform vec4  uScr;     // on (0/1), inset margin (rad), text brightness 0…1, flicker gain
 uniform vec4  uScrM;    // text frame: top v (rad, rel. to eye centre), S (tex units per rad), scanlines per screen, scanline depth
@@ -151,7 +153,8 @@ vec3 eyeTap(vec3 col, float lon, float lat, float Z, float rimA, float pc){
     dp *= min(psx, 1.0) * uPupil.w * RR * (0.5 * Z + 0.5);
     vec3 pcol = uToonCol;
     if (uScr.x > 0.0) {
-      // the screen: the grown pupil ∩ the white inset by the margin (the white's d includes lids → a blink covers it)
+      // the screen: pupil ∩ eye outline. uScr.y ≤ 0 pushes the clip past the white so the sclera is gone;
+      // the white's own fill (below, and the composite in eyes()) is the clip. d includes lids → a blink covers it.
       float din = d + uScr.y;
       dp = max(dp, din * RR * (0.5 * Z + 0.5));
       float vy = v - uShapeC.x;
@@ -229,7 +232,14 @@ vec3 eyes(vec3 col, vec2 p, vec2 off){
   float cg = eyeTap(col, lon, lat, Z, rimA, 1.0).g;            // centre tap (also the pupil)
   vec3 c = vec3(eyeTap(col, lon + dl.x, lat + dl.y, Z + dl.z, -rimA, 0.0).r, cg,
                 eyeTap(col, lon - dl.x, lat - dl.y, Z - dl.z, -rimA, 0.0).b);   // side taps skip the pupil
-  return mix(c, gScrC, gCovP * gFillMax);
+  float cov = gCovP * gFillMax;
+  if (uScr.x > 0.0) {
+    // full takeover: any pixel the white owns becomes screen, including the antialiased edge,
+    // so that edge blends screen into the rim instead of leaving a sclera ring. The crescent
+    // (white fill ~ 0) is untouched. gCovP still limits it to the pupil, so the shrink-back reads.
+    cov = gCovP * smoothstep(0.0, 0.02, gFillMax);
+  }
+  return mix(c, gScrC, cov);
 }
 
 void main(){

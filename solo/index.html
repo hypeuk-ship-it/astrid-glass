@@ -107,9 +107,11 @@ uniform vec4  uPoolK;   // inset at sides (30es), inset at bottom (14es), margin
 uniform vec4  uFringeK; // fringe exp2 k, outer-smear exp2 k, fringe strength, haze
 uniform vec4  uMisc;    // pool strength, chroma split scale, contact exp2 k (34u), dent strength
 uniform vec4  uTouch;   // petting contact: x, y (units), pressure (sprung), -
-// ---- thinking: pupil takeover screen (0 = off → skipped). The pupil grows into the white; where it meets the
-// white inset by a thin margin it becomes a screen: canvas2D text texture (both eyes side by side), scanlines,
-// edge vignette. Centre tap only (no RGB split on the screen, like the pupil).
+// ---- thinking: pupil takeover screen (0 = off → skipped). The pupil scales past the white and is clipped to
+// the eye outline (uScr.y ≤ 0, no sclera rim). Where it covers the white it is a screen: canvas2D text texture
+// (both eyes side by side), scanlines, edge vignette. Centre tap only (no RGB split on the screen, like the pupil).
+// A blink's lid is in the white SDF, so the lid still cuts across the screen. The dark rim crescent stays,
+// because it sits where the white fill is ~0.
 uniform sampler2D uScrT;
 uniform vec4  uScr;     // on (0/1), inset margin (rad), text brightness 0…1, flicker gain
 uniform vec4  uScrM;    // text frame: top v (rad, rel. to eye centre), S (tex units per rad), scanlines per screen, scanline depth
@@ -198,7 +200,8 @@ vec3 eyeTap(vec3 col, float lon, float lat, float Z, float rimA, float pc){
     dp *= min(psx, 1.0) * uPupil.w * RR * (0.5 * Z + 0.5);
     vec3 pcol = uToonCol;
     if (uScr.x > 0.0) {
-      // the screen: the grown pupil ∩ the white inset by the margin (the white's d includes lids → a blink covers it)
+      // the screen: pupil ∩ eye outline. uScr.y ≤ 0 pushes the clip past the white so the sclera is gone;
+      // the white's own fill (below, and the composite in eyes()) is the clip. d includes lids → a blink covers it.
       float din = d + uScr.y;
       dp = max(dp, din * RR * (0.5 * Z + 0.5));
       float vy = v - uShapeC.x;
@@ -276,7 +279,14 @@ vec3 eyes(vec3 col, vec2 p, vec2 off){
   float cg = eyeTap(col, lon, lat, Z, rimA, 1.0).g;            // centre tap (also the pupil)
   vec3 c = vec3(eyeTap(col, lon + dl.x, lat + dl.y, Z + dl.z, -rimA, 0.0).r, cg,
                 eyeTap(col, lon - dl.x, lat - dl.y, Z - dl.z, -rimA, 0.0).b);   // side taps skip the pupil
-  return mix(c, gScrC, gCovP * gFillMax);
+  float cov = gCovP * gFillMax;
+  if (uScr.x > 0.0) {
+    // full takeover: any pixel the white owns becomes screen, including the antialiased edge,
+    // so that edge blends screen into the rim instead of leaving a sclera ring. The crescent
+    // (white fill ~ 0) is untouched. gCovP still limits it to the pupil, so the shrink-back reads.
+    cov = gCovP * smoothstep(0.0, 0.02, gFillMax);
+  }
+  return mix(c, gScrC, cov);
 }
 
 void main(){
@@ -378,9 +388,9 @@ void main(){
   gl_Position = vec4(aPos, 0.0, 1.0);
 }
 </script>
-<script src="coats.js?v=10081355"></script>
-<script src="springs.js?v=10081355"></script>
-<script src="face.js?v=10081355"></script>
+<script src="coats.js?v=10081431"></script>
+<script src="springs.js?v=10081431"></script>
+<script src="face.js?v=10081431"></script>
 <script>
 (function(){
 'use strict';
@@ -882,10 +892,9 @@ function blinkLife(){
 /* ================= thinking (prototype) =================
    States: idle · listening · thinking · working · done (talk / error / searching / loading are planned, see
    /workspace/research/astrid-thinking-plan.md). Face motion = springs only: every change here sets a spring target.
-   working = the pupil takeover: anticipation squeeze → the pupil grows (spring, ~10% overshoot) into the white minus a
-   thin margin → it becomes a screen (canvas2D text texture, both eyes side by side, sampled in glass.frag only inside
-   the pupil, centre tap) → text types in with a blinking cursor, lines scroll → done: text fades, the pupil shrinks
-   back, a slow satisfied blink + a little content.
+   working = the pupil takeover: the pupil is instantly the whole white (scaled past it, clipped to the eye outline,
+   no sclera rim; glass.frag) and the screen is already up with its first lines. Text keeps typing for THINK_HOLD
+   (5 s). Then done: text fades, the pupil shrinks back, a slow satisfied blink + a little content.
    Styles (?think=): crt (green phosphor, scanlines, glow) · mono (coat-tinted clean text) · amber (retro, block cursor)
    · min (no text: blinking cursor, typing dots, progress bar) · rain (falling glyphs). ?eyes=same|split. */
 const THINK_STYLES={
@@ -902,6 +911,7 @@ const THINK_SCRIPTS=[
   ['$ week','Mon 4','Tue 2','Wed \u2014'],
   ['$ find','lunch?','12:30','free'],
 ];
+const THINK_HOLD=5000;   // visible terminal, then the fade + shrink
 const TH={state:'idle', style:THINK_STYLES[Q.get('think')]?Q.get('think'):'crt', eyes:Q.get('eyes')==='same'?'same':'split',
   take:spring(0,.1,.64), txt:spring(0,.15,.6), lidW:spring(0,.06,.78), pupS:spring(1,.08,.72),
   t0:0, phase:0, side:1, gx:0, gy:0, nextScan:0, flick:1,
@@ -915,13 +925,26 @@ const sx=SCR.getContext('2d');
 const FONT='ui-monospace, Menlo, "SF Mono", "DejaVu Sans Mono", Consolas, monospace', FS=26, LH=31, BASEY=166, X0=48;
 /* the screen in canvas px (per eye half, 256×256): white centre (128,142), rx 101, top ry 142, bottom ry 104 */
 function thinkReset(){ [TH.A,TH.B].forEach(B=>{B.lines.length=0; B.cur=''; snap(B.scroll,0);});
-  TH.si=0; TH.typing=null; TH.bar=null; TH.next=CK.simT+260; TH.dirty=true; snap(TH.prog,0); }
+  TH.si=0; TH.typing=null; TH.bar=null; TH.next=CK.simT; TH.dirty=true; snap(TH.prog,0); }
+/* first command + first result are already on the screen; the rest types during the hold */
+function primeWorkingText(){
+  const scr=TH.script, outB=TH.eyes==='same'?TH.A:TH.B;
+  let i=0;
+  if(scr[0]&&String(scr[0]).startsWith('$ ')){ pushLine(TH.A, scr[0]); i=1; }
+  if(scr[i]&&!String(scr[i]).startsWith('$ ')&&scr[i]!=='#bar'){ pushLine(outB, scr[i]); i++; }
+  TH.si=i; TH.next=CK.simT;
+}
 function thinkState(s){
   if(s===TH.state) return;
   const prev=TH.state; TH.state=s; TH.t0=CK.simT; TH.phase=0;
   if(s==='thinking'){ TH.side=Math.random()<.5?-1:1; TH.nextScan=CK.simT;
     const left=BR.t0+BR.dur-CK.simT; if(left>40) BR.dur+=left*.55; }   // stretch the breath already in progress
-  if(s==='working'){ if(prev!=='working') thinkReset(); }
+  if(s==='working'){
+    if(prev!=='working') thinkReset();
+    // instant: full pupil screen + first text, no squeeze / grow / fade-in
+    snap(TH.take,1); snap(TH.txt,1); TH.phase=2;
+    primeWorkingText();
+  }
   TH.dirty=true;
 }
 const pushLine=(B,s)=>{ B.lines.push(s); if(B.lines.length>14) B.lines.shift(); B.scroll.x+=LH; TH.dirty=true; };
@@ -942,7 +965,7 @@ function runScript(){
     return;
   }
   const item=TH.queue.length?TH.queue.shift():TH.script[TH.si++];
-  if(item===undefined){ if((TH.demo==='loop'||TH.demo==='once')&&TH.state==='working') thinkState('done'); else TH.si=0; TH.next=CK.simT+400; return; }
+  if(item===undefined){ TH.next=CK.simT+1e9; return; }   // hold the last lines; the 5 s timer ends the screen
   if(item.startsWith('$ ')){ TH.typing=item; TH.ci=2; cmdB.cur='$ '; TH.dirty=true; TH.next=CK.simT+260+Math.random()*260; }
   else if(item==='#bar'){ pushLine(outB,'[········]'); TH.bar={n:0}; TH.next=CK.simT+120; }
   else { pushLine(outB,item); TH.next=CK.simT+70+Math.random()*150; }
@@ -959,11 +982,11 @@ function thinkTick(){
     }
     else if(s==='done'&&T_>1800){ thinkState('idle'); if(TH.demo==='once') TH.demo='off'; }
   }
-  // takeover choreography
+  // takeover: already full the moment working starts (thinkState). Holds THINK_HOLD, then the fade.
   if(s==='working'){
-    if(TH.phase===0){ tk.k=.3; tk.d=.6; tk.t=-.08; if(T_>110){ TH.phase=1; tk.k=.06; tk.d=.75; tk.t=1; size.v+=.035; } }  // ~200 ms to full, ~8% overshoot
-    if(TH.phase===1&&tk.x>.9){ TH.phase=2; TH.txt.t=1; TH.next=Math.max(TH.next,CK.simT+180); }
-    if(TH.phase===2) runScript();
+    TH.phase=2; tk.t=1; TH.txt.t=1;
+    runScript();
+    if(T_>=THINK_HOLD) thinkState('done');
   } else if(s==='done'){
     if(TH.phase===0){ TH.txt.t=0; TH.phase=1; }
     if(TH.phase===1&&T_>230){ tk.k=.12; tk.d=.66; tk.t=0; TH.phase=2; }
@@ -980,7 +1003,7 @@ function thinkTick(){
   } else if(s==='working'){ if(CK.simT>=TH.nextScan){ TH.gx=(Math.random()*2-1)*.03; TH.gy=(Math.random()*2-1)*.02; TH.nextScan=CK.simT+1400+Math.random()*1400; } }
   else if(s==='done'){ TH.gx=0; TH.gy=0; }
   if(s!=='idle'&&!forced){ yaw.t=TH.gx; pitch.t=TH.gy; CK.pointerAt=CK.simT; }
-  TH.lidW.t=s==='thinking'?.62:s==='working'?.12:0;                        // flat squint (tired lid, angle 0)
+  TH.lidW.t=s==='thinking'?.62:0;                                      // thinking squint only; the screen fills an open eye
   TH.pupS.t=s==='thinking'?.86:1;                                          // pupils narrow a touch while thinking
   if(s==='thinking'){ BK.ck=.14; BK.cd=.62; BK.k=.045; BK.d=.72; BK.h=120; }   // slow close, short hold, slow reopen
   else { BK.ck=.4; BK.cd=.45; BK.k=.10; BK.d=.67; BK.h=35; }
@@ -1066,7 +1089,8 @@ function thinkUpload(){
 window.__thinkDirty=()=>{TH.dirty=true;};
 const thinkBtn=document.createElement('button'); thinkBtn.type='button'; thinkBtn.className='think'; thinkBtn.id='thinkBtn'; thinkBtn.textContent='Think';
 thinkBtn.title='Run one thinking cycle'; thinkBtn.setAttribute('aria-label','Think');
-thinkBtn.onclick=e=>{ e.stopPropagation(); if(TH.demo==='loop'||TH.state!=='idle') return; TH.demo='once'; thinkState('thinking'); };
+thinkBtn.onclick=e=>{ e.stopPropagation(); if(TH.demo==='loop'||TH.state!=='idle') return; TH.demo='once';
+  TH.script=THINK_SCRIPTS[TH.scriptN].slice(); TH.scriptN=(TH.scriptN+1)%THINK_SCRIPTS.length; thinkState('working'); };
 bar.appendChild(thinkBtn); TH._btn=thinkBtn;
 function tick(){            // one fixed 60 Hz step of the whole motion model
   for(let i=0;i<ALL.length;i++) save(ALL[i]); CK.prevNT=CK.noiseT;
@@ -1128,21 +1152,20 @@ const blobR=(i,ph)=>i===0?56*(1+(ph-1)*.5):i===1?196*ph:52, BLOB_RX=[82,136,70];
 /* CK.alpha = a ∈ [0,1): how far into the next 60 Hz step this frame is → interpolated, so 120 Hz is smooth.
    Everything constant across the frame is computed here, not per pixel. No allocations (verified with
    the CDP heap sampler: see bench notes). */
-/* pupil takeover (see thinkTick): tk < 0 = anticipation squeeze; 0…1(+overshoot) = the pupil grows to an oval bigger
-   than the white, centred on it, so the white inset by a thin margin (shader) is what shows; tk > 1 eats the margin */
+/* pupil takeover: tk 0→1 scales the pupil past the open white and centres it, so the eye outline
+   (shader, uScr.y ≤ 0) is the clip. No squeeze, no margin, no fade-in. tk back to 0 is the shrink. */
 const vScr=F32(4), vScrM=F32(4), vScrK=F32(4);
-const sm01=x=>{x=Math.max(0,Math.min(1,x)); return x*x*(3-2*x);};
 function thinkTakeover(tk,eoy){
   vScr[0]=vScr[1]=0; vScrK[2]=0;
-  if(tk<-1e-4){ const s=1+2.2*tk; TO.a*=s; TO.b*=s; return; }
-  if(tk<1e-4) return;
-  const hw0=TOPEN.hw, hh0=TOPEN.hh, gc=Math.min(1,tk*1.4), ic=1-gc;
-  TO.a+=(1.35*hw0-TO.a)*tk; TO.b+=(1.35*hh0-TO.b)*tk;
-  TO.pin*=ic; TO.pu*=ic; TO.pv+=((eoy+.12*hh0)-TO.pv)*gc;
+  if(tk<1e-3) return;
+  const hw0=TOPEN.hw, hh0=TOPEN.hh, gc=Math.min(1,tk), ic=1-gc, S=2.25;
+  TO.a+=(S*hw0-TO.a)*gc; TO.b+=(S*hh0-TO.b)*gc;
+  TO.pin*=ic; TO.pu*=ic; TO.pv+=(eoy-TO.pv)*gc;
   TO.cuL*=ic; TO.cvL*=ic; TO.cuR*=ic; TO.cvR*=ic;
   TO.m0+=(1-TO.m0)*gc; TO.m1*=ic; TO.m3+=(1-TO.m3)*gc; TO.ms+=(1-TO.ms)*gc;
-  const mt=.075*hw0; let m=mt*sm01((tk-.35)/.6); if(tk>1) m=mt*Math.max(0,1-3*(tk-1));
-  vScr[0]=1; vScr[1]=m; vScrK[2]=sm01((tk-.4)/.5);
+  vScr[0]=1;
+  vScr[1]=-0.08*gc;     // radians: clip sits outside the white; the white fill is the outline
+  vScrK[2]=gc>=0.98?1:gc;
 }
 function thinkUniforms(a){
   const st=THINK_STYLES[TH.style], hh0=TOPEN.hh, hw0=TOPEN.hw;

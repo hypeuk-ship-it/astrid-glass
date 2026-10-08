@@ -5,8 +5,8 @@ dark rim crescent behind, tall dark pupils) with the toon layer on. Default coat
 and carbon) plus Light/Dark, Sound, and Think. The eye is hard-wired: no eye-shape picker, no emote sheets, no URL or
 localStorage needed (the coat/mode choice is remembered under its own key, `astridSoloCoat`).
 
-Think: the pupil grows into the white and runs a green CRT terminal about time and events (calendar scripts).
-The Think button runs one cycle (idle → thinking → working → done). `?demo=think` loops it. `?think=crt|mono|amber|min|rain` (crt default), `?eyes=same|split` (split default).
+Think: the pupil fills the white completely and a green CRT terminal about time and events is up immediately, held for 5 seconds, then the text fades and the pupil shrinks back with a satisfied blink.
+The Think button runs one cycle. `?demo=think` loops it (a thinking squint, then the 5 s screen). `?think=crt|mono|amber|min|rain` (crt default), `?eyes=same|split` (split default).
 
 Kept from the full rig: the glass shader (frost, pool, haze, fringe, RGB split), breathing, petting / tickle / tap
 reactions and voice (Sound button), blinks (incl. gaze-shift blinks), gaze + pupil life (dilation, dart stretch,
