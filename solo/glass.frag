@@ -70,7 +70,6 @@ uniform vec4  uScr;     // on (0/1), inset margin (rad), text brightness 0…1, 
 uniform vec4  uScrM;    // text frame: top v (rad, rel. to eye centre), S (tex units per rad), scanlines per screen, scanline depth
 uniform vec4  uScrK;    // vignette width (rad), bg lift, bg mix (pupil ink → screen bg), -
 uniform vec3  uScrBg;   // screen background (dark)
-uniform vec4  uBrow;    // emotion brows: raise (rad), inner-end offset (rad, + = inner up), weight, half-thickness
 uniform vec4  uEmo;     // heart 0..1, warm 0..1, pupil width scale (1 = round), smile glow 0..1
 
 const vec2  C  = vec2(120.0, 120.0);
@@ -264,22 +263,6 @@ vec3 eyes(vec3 col, vec2 p, vec2 off){
   }
   vec3 ink = uScr.x > 0.0 ? gScrC : mix(uToonCol, vec3(0.93, 0.16, 0.40), uEmo.x);
   c = mix(c, ink, cov);
-  // thin brow arcs sit just above the white. Screen coverage wins if they ever overlap.
-  if (uBrow.z > 0.01) {
-    float side = lon < 0.0 ? -1.0 : 1.0;
-    float u = lon - uShapeC.w * side;
-    float v = lat - uEyeK2.z + uEyeK2.w * u * u;
-    float psx = max(1.0 + side * uAsym.x, 0.2);
-    float uu = u / psx;
-    float inn = -side * uu;                                    // + toward the nose
-    float hw = uEyeA.x, hh = uEyeA.y;
-    float yb = v - (hh * 1.16 + uBrow.x + uBrow.y * inn / max(hw, 0.04) - 0.30 * uu * uu / max(hw, 0.04));
-    vec2 bq = vec2(abs(uu) - hw * 0.70, abs(yb) - uBrow.w);
-    float db = length(max(bq, 0.0)) + min(max(bq.x, bq.y), 0.0);
-    float ds = db * RR * (0.5 * Z + 0.5);
-    float bA = uBrow.z * smoothstep(0.02, 0.08, Z) * (1.0 - smoothstep(-uEyeK.x, uEyeK.x, ds));
-    c = mix(c, uToonCol, bA * (1.0 - cov));
-  }
   return c;
 }
 

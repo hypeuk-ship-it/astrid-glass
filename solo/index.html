@@ -121,7 +121,6 @@ uniform vec4  uScr;     // on (0/1), inset margin (rad), text brightness 0…1, 
 uniform vec4  uScrM;    // text frame: top v (rad, rel. to eye centre), S (tex units per rad), scanlines per screen, scanline depth
 uniform vec4  uScrK;    // vignette width (rad), bg lift, bg mix (pupil ink → screen bg), -
 uniform vec3  uScrBg;   // screen background (dark)
-uniform vec4  uBrow;    // emotion brows: raise (rad), inner-end offset (rad, + = inner up), weight, half-thickness
 uniform vec4  uEmo;     // heart 0..1, warm 0..1, pupil width scale (1 = round), smile glow 0..1
 
 const vec2  C  = vec2(120.0, 120.0);
@@ -315,22 +314,6 @@ vec3 eyes(vec3 col, vec2 p, vec2 off){
   }
   vec3 ink = uScr.x > 0.0 ? gScrC : mix(uToonCol, vec3(0.93, 0.16, 0.40), uEmo.x);
   c = mix(c, ink, cov);
-  // thin brow arcs sit just above the white. Screen coverage wins if they ever overlap.
-  if (uBrow.z > 0.01) {
-    float side = lon < 0.0 ? -1.0 : 1.0;
-    float u = lon - uShapeC.w * side;
-    float v = lat - uEyeK2.z + uEyeK2.w * u * u;
-    float psx = max(1.0 + side * uAsym.x, 0.2);
-    float uu = u / psx;
-    float inn = -side * uu;                                    // + toward the nose
-    float hw = uEyeA.x, hh = uEyeA.y;
-    float yb = v - (hh * 1.16 + uBrow.x + uBrow.y * inn / max(hw, 0.04) - 0.30 * uu * uu / max(hw, 0.04));
-    vec2 bq = vec2(abs(uu) - hw * 0.70, abs(yb) - uBrow.w);
-    float db = length(max(bq, 0.0)) + min(max(bq.x, bq.y), 0.0);
-    float ds = db * RR * (0.5 * Z + 0.5);
-    float bA = uBrow.z * smoothstep(0.02, 0.08, Z) * (1.0 - smoothstep(-uEyeK.x, uEyeK.x, ds));
-    c = mix(c, uToonCol, bA * (1.0 - cov));
-  }
   return c;
 }
 
@@ -511,7 +494,7 @@ const toFallback=why=>{console.warn('Astrid: '+why+', using the SVG fallback'); 
 const gl=cv.getContext('webgl',GL_OPTS)||cv.getContext('experimental-webgl',GL_OPTS);
 if(!gl){ toFallback('WebGL unavailable'); return; }
 const UNIFORMS=['uVS','uBodyM','uNT','uWarp','uPaper','uCore','uDeep','uMid','uEdge','uHalo','uEye','uEyeHi','uEyeLo','uGlow','uBloomCol','uLiftCol','uTouchCol','uAura','uMode',
-  'uRot','uEyeP','uEyeA','uShapeC','uAsym','uCutN','uLat','uShadow','uToon','uRimP','uPupil','uPupilA','uPupilM','uPupilC','uToonCol','uEyeL','uEyeR','uEyeK','uEyeK2','uFace','uQ','uBA','uBB','uBC','uCA','uCB','uCC','uFrost','uPoolK','uFringeK','uMisc','uTouch','uScrT','uScr','uScrM','uScrK','uScrBg','uBrow','uEmo'];
+  'uRot','uEyeP','uEyeA','uShapeC','uAsym','uCutN','uLat','uShadow','uToon','uRimP','uPupil','uPupilA','uPupilM','uPupilC','uToonCol','uEyeL','uEyeR','uEyeK','uEyeK2','uFace','uQ','uBA','uBB','uBC','uCA','uCB','uCC','uFrost','uPoolK','uFringeK','uMisc','uTouch','uScrT','uScr','uScrM','uScrK','uScrBg','uEmo'];
 let U={}, lost=false; const GN=24, GCOUNT=GN*GN*6;
 const draw=()=>gl.drawElements(gl.TRIANGLES,GCOUNT,gl.UNSIGNED_SHORT,0);
 let prog=null, scrTex=null;
@@ -1289,7 +1272,7 @@ bar.appendChild(thinkBtn); TH._btn=thinkBtn;
 /* ================= emotions =================
    Six held faces on the Toon eye. Everything moves on springs (~300 ms, k .12 / d .72). No sine.
    Lids reuse face.js (sad / angry / tired). Happy is the soft upward bow (the same arc as content,
-   not the content squint). Brows are thin arcs in the shader. Love swaps the pupil for a heart.
+   not the content squint). No brow strokes: the lids, pupil size and gaze carry the face. Love swaps the pupil for a heart.
    Think still owns the face while it runs: emoGate snaps shut for thinking / working / done and
    eases back to whatever was held. */
 const EMO_K=.12, EMO_D=.72;
@@ -1297,18 +1280,17 @@ const emoSpring=(x)=>spring(x,EMO_K,EMO_D);
 const emoGate=emoSpring(1);
 const wSad=emoSpring(0), wAngry=emoSpring(0), wTired=emoSpring(0), wArc=emoSpring(0), wLift=emoSpring(0);
 const wPup=emoSpring(1), wNarrow=emoSpring(1);
-const wBrowR=emoSpring(0), wBrowS=emoSpring(0), wBrowA=emoSpring(0);
 const wHeart=emoSpring(0), wWarm=emoSpring(0), wSmile=emoSpring(0);
-const EMO_SPRINGS=[emoGate,wSad,wAngry,wTired,wArc,wLift,wPup,wNarrow,wBrowR,wBrowS,wBrowA,wHeart,wWarm,wSmile];
+const EMO_SPRINGS=[emoGate,wSad,wAngry,wTired,wArc,wLift,wPup,wNarrow,wHeart,wWarm,wSmile];
 ALL.push(...EMO_SPRINGS);
 const EMOS={
-  neutral:   {sad:0, angry:0, tired:0, arc:0, lift:0, pup:1, narrow:1, browR:0, browS:0, browA:0, heart:0, warm:0, smile:0, gx:null, gy:null, size:1},
-  happy:     {sad:0, angry:0, tired:0, arc:1, lift:1, pup:1, narrow:1, browR:.018, browS:-.028, browA:.7, heart:0, warm:.12, smile:1, gx:0, gy:-.05, size:1.04},
-  sad:       {sad:1, angry:0, tired:0, arc:0, lift:0, pup:.78, narrow:1, browR:.012, browS:.078, browA:1, heart:0, warm:0, smile:0, gx:0, gy:.26, size:1},
-  angry:     {sad:0, angry:1, tired:0, arc:0, lift:0, pup:.92, narrow:.48, browR:-.012, browS:-.085, browA:1, heart:0, warm:0, smile:0, gx:0, gy:.06, size:.98},
-  surprised: {sad:0, angry:0, tired:0, arc:0, lift:.35, pup:.46, narrow:1, browR:.055, browS:.01, browA:1, heart:0, warm:0, smile:0, gx:0, gy:-.18, size:1.14},
-  sleepy:    {sad:0, angry:0, tired:1, arc:0, lift:0, pup:1.24, narrow:1, browR:-.038, browS:0, browA:.85, heart:0, warm:0, smile:0, gx:0, gy:.18, size:1},
-  love:      {sad:0, angry:0, tired:.30, arc:.4, lift:.15, pup:1.12, narrow:1, browR:.016, browS:.02, browA:.4, heart:1, warm:1, smile:.3, gx:0, gy:-.02, size:1.02},
+  neutral:   {sad:0, angry:0, tired:0, arc:0, lift:0, pup:1, narrow:1, heart:0, warm:0, smile:0, gx:null, gy:null, size:1},
+  happy:     {sad:0, angry:0, tired:0, arc:1, lift:1, pup:1, narrow:1, heart:0, warm:.12, smile:1, gx:0, gy:-.05, size:1.04},
+  sad:       {sad:1, angry:0, tired:0, arc:0, lift:0, pup:.78, narrow:1, heart:0, warm:0, smile:0, gx:0, gy:.26, size:1},
+  angry:     {sad:0, angry:1, tired:0, arc:0, lift:0, pup:.92, narrow:.48, heart:0, warm:0, smile:0, gx:0, gy:.06, size:.98},
+  surprised: {sad:0, angry:0, tired:0, arc:0, lift:.35, pup:.46, narrow:1, heart:0, warm:0, smile:0, gx:0, gy:-.18, size:1.14},
+  sleepy:    {sad:0, angry:0, tired:1, arc:0, lift:0, pup:1.24, narrow:1, heart:0, warm:0, smile:0, gx:0, gy:.18, size:1},
+  love:      {sad:0, angry:0, tired:.30, arc:.4, lift:.15, pup:1.12, narrow:1, heart:1, warm:1, smile:.3, gx:0, gy:-.02, size:1.02},
 };
 const EM={name:'neutral', wasBusy:false, pop:0, btns:{}};
 function emoSpec(){ return EMOS[EM.name]||EMOS.neutral; }
@@ -1316,7 +1298,6 @@ function emoApplyTargets(){
   const e=emoSpec();
   wSad.t=e.sad; wAngry.t=e.angry; wTired.t=e.tired; wArc.t=e.arc; wLift.t=e.lift;
   wPup.t=e.pup; wNarrow.t=e.narrow;
-  wBrowR.t=e.browR; wBrowS.t=e.browS; wBrowA.t=e.browA;
   wHeart.t=e.heart; wWarm.t=e.warm; wSmile.t=e.smile;
 }
 function emoSyncBtns(){
@@ -1439,7 +1420,7 @@ const blobR=(i,ph)=>i===0?56*(1+(ph-1)*.5):i===1?196*ph:52, BLOB_RX=[82,136,70];
    the CDP heap sampler: see bench notes). */
 /* pupil takeover: tk 0→1 scales the pupil past the open white and centres it, so the eye outline
    (shader, uScr.y ≤ 0) is the clip. No squeeze, no margin, no fade-in. tk back to 0 is the shrink. */
-const vScr=F32(4), vScrM=F32(4), vScrK=F32(4), vBrow=F32(4), vEmo=F32(4);
+const vScr=F32(4), vScrM=F32(4), vScrK=F32(4), vEmo=F32(4);
 function thinkTakeover(tk,eoy){
   vScr[0]=vScr[1]=0; vScrK[2]=0;
   if(tk<1e-3) return;
@@ -1500,8 +1481,6 @@ function pushUniforms(){
     vPupilA[0]=TO.a; vPupilA[1]=TO.b; vPupilA[2]=1/TO.a; vPupilA[3]=1/TO.b; gl.uniform4fv(U.uPupilA,vPupilA);
   }
   gl.uniform4fv(U.uToon,vToon);
-  vBrow[0]=at(wBrowR,a)*gate; vBrow[1]=at(wBrowS,a)*gate; vBrow[2]=Math.max(0,at(wBrowA,a))*gate; vBrow[3]=0.020;
-  gl.uniform4fv(U.uBrow,vBrow);
   vEmo[0]=Math.max(0,at(wHeart,a))*gate; vEmo[1]=Math.max(0,at(wWarm,a))*gate;
   vEmo[2]=1+(at(wNarrow,a)-1)*gate; vEmo[3]=Math.max(0,at(wSmile,a))*gate;
   gl.uniform4fv(U.uEmo,vEmo);
@@ -1517,7 +1496,6 @@ function pushUniforms(){
   vEyeP[2]=efade; vEyeP[3]=(crad+arc*crad)*RR+1+mg;
   if(tr>0){ const reach=(Math.hypot(TO.rpo,TO.rpu)+(TO.rs-1)*Math.max(ehw,ehh))*RR+2;   // the rim pokes out: grow the capsule if needed
     if(reach>mg) vEyeP[3]+=reach-mg; }
-  if(vBrow[2]>0.02) vEyeP[3]+=14;   // brow arcs sit just above the white
   gl.uniform4fv(U.uEyeP,vEyeP);
   PJ[0]=cy; PJ[1]=sy; PJ[2]=cp; PJ[3]=sp; PJ[4]=cr; PJ[5]=sr;
   for(let s2=-1;s2<=1;s2+=2){
