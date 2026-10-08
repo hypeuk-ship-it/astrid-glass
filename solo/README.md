@@ -5,7 +5,7 @@ dark rim crescent behind, tall dark pupils) with the toon layer on. Default coat
 and carbon) plus Light/Dark, Sound, and Think. The eye is hard-wired: no eye-shape picker, no emote sheets, no URL or
 localStorage needed (the coat/mode choice is remembered under its own key, `astridSoloCoat`).
 
-Think: the pupil fills the white completely and a green CRT about time and events comes up at once, empty except a `$ ` prompt. The left eye types the command character by character, a short beat shows the command running (blinking cursor, dots in the right eye), then the right eye prints the result lines one at a time. Her gaze tracks along whichever line is being typed or read, and saccades back for the next line. The screen stays up about 5 seconds, holds on the last line, then the text fades and the pupil shrinks back with a satisfied blink.
+Think: the pupil fills the white completely and a green CRT about time and events comes up at once, empty except a `$ ` prompt. The left eye types the command in fast runs with a pause before the last character (the block cursor blinks only while waiting). A spinner and `run` show the command executing, then the right eye prints the result lines one at a time. Her gaze makes a small scan along the active line and saccades to the next one. The screen stays up about 5 seconds, holds on the last line, then the text fades and the pupil shrinks back with a pleased blink.
 The Think button runs one cycle. `?demo=think` loops it (a thinking squint, then the screen). `?think=crt|mono|amber|min|rain` (crt default), `?eyes=same|split` (split default).
 
 Kept from the full rig: the glass shader (frost, pool, haze, fringe, RGB split), breathing, petting / tickle / tap
