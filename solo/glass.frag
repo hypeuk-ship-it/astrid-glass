@@ -20,7 +20,7 @@
 // axis + glow margin) and does ONE sphere inversion per pixel: the R/B chroma taps reuse it through the
 // analytic Jacobian of (lon, lat) instead of two more inversions.
 // The page background is the same paper colour, so the canvas itself only covers the orb + bloom.
-// Port note (Metal): uniforms map 1:1 to a constant buffer; plain functions; no textures.
+// Port note (Metal): uniforms map 1:1 to a constant buffer; plain functions; one texture (the thinking screen).
 #ifdef GL_FRAGMENT_PRECISION_HIGH
 precision highp float;
 #else
@@ -60,6 +60,14 @@ uniform vec4  uPoolK;   // inset at sides (30es), inset at bottom (14es), margin
 uniform vec4  uFringeK; // fringe exp2 k, outer-smear exp2 k, fringe strength, haze
 uniform vec4  uMisc;    // pool strength, chroma split scale, contact exp2 k (34u), dent strength
 uniform vec4  uTouch;   // petting contact: x, y (units), pressure (sprung), -
+// ---- thinking: pupil takeover screen (0 = off → skipped). The pupil grows into the white; where it meets the
+// white inset by a thin margin it becomes a screen: canvas2D text texture (both eyes side by side), scanlines,
+// edge vignette. Centre tap only (no RGB split on the screen, like the pupil).
+uniform sampler2D uScrT;
+uniform vec4  uScr;     // on (0/1), inset margin (rad), text brightness 0…1, flicker gain
+uniform vec4  uScrM;    // text frame: top v (rad, rel. to eye centre), S (tex units per rad), scanlines per screen, scanline depth
+uniform vec4  uScrK;    // vignette width (rad), bg lift, bg mix (pupil ink → screen bg), -
+uniform vec3  uScrBg;   // screen background (dark)
 
 const vec2  C  = vec2(120.0, 120.0);
 const float R  = 118.0;   // orb
@@ -108,7 +116,7 @@ float eyeSDF(vec2 p, vec2 b, float side, vec3 rp){
 // seam against the rim behind, no light line) and the pupil itself never gets an RGB split. gFillMax = the union
 // of the three taps' white fills: the pupil is laid over all three channels there too, so where it nears the
 // white's edge (e.g. foreshortened at the limb) the edge's colour split never shows on it.
-float gCovP, gFillMax;
+float gCovP, gFillMax; vec3 gScrC;
 
 // eye shading for one chroma tap, given its sphere coordinates (lon, lat) and visible-hemisphere Z
 vec3 eyeTap(vec3 col, float lon, float lat, float Z, float rimA, float pc){
@@ -141,9 +149,25 @@ vec3 eyeTap(vec3 col, float lon, float lat, float Z, float rimA, float pc){
     float pk = length(p0);
     float dp = pk * (pk - 1.0) * inversesqrt(max(dot(p1, p1), 1e-8));
     dp *= min(psx, 1.0) * uPupil.w * RR * (0.5 * Z + 0.5);
+    vec3 pcol = uToonCol;
+    if (uScr.x > 0.0) {
+      // the screen: the grown pupil ∩ the white inset by the margin (the white's d includes lids → a blink covers it)
+      float din = d + uScr.y;
+      dp = max(dp, din * RR * (0.5 * Z + 0.5));
+      float vy = v - uShapeC.x;
+      vec2 tl = vec2(0.5 + u * uScrM.y, (uScrM.x - vy) * uScrM.y);       // eye-local text frame (not mirrored)
+      vec2 tc = vec2(clamp(tl.x, 0.004, 0.996) * 0.5 + (side < 0.0 ? 0.0 : 0.5), clamp(tl.y, 0.0, 1.0));
+      vec3 tx = texture2D(uScrT, tc).rgb;
+      float sl = abs(fract(tl.y * uScrM.z) - 0.5) * 2.0;                 // triangle scanline (spatial, not time)
+      float vig = mix(0.45, 1.0, smoothstep(0.0, uScrK.x, -din));        // bezel falloff toward the margin
+      pcol = mix(uToonCol, uScrBg, uScrK.z) * (1.0 + uScrK.y * vig)
+           + tx * (uScr.z * uScr.w * vig * (1.0 - uScrM.w * sl));
+      gScrC = pcol;
+    }
     gCovP = uToon.y * (1.0 - smoothstep(-w, w, dp));
   }
-  ec = mix(ec, uToonCol, gCovP);
+  vec3 pcol2 = uScr.x > 0.0 ? gScrC : uToonCol;
+  ec = mix(ec, pcol2, gCovP);
   float fill = 1.0 - smoothstep(-w, w, ds);
   gFillMax = max(gFillMax, fill * vis);
   return mix(col, ec, fill * vis);
@@ -201,11 +225,11 @@ vec3 eyes(vec3 col, vec2 p, vec2 off){
   col = eyeShadow(col, lon, lat, Z);
   float rimA = 0.0;                                            // ≥ 0 on the centre tap, ≤ 0 on the side taps
   if (uToon.x > 0.0) { rimA = eyeRim(lon, lat, Z); col = mix(col, uToonCol, rimA); }
-  gCovP = 0.0; gFillMax = 0.0;
+  gCovP = 0.0; gFillMax = 0.0; gScrC = uToonCol;
   float cg = eyeTap(col, lon, lat, Z, rimA, 1.0).g;            // centre tap (also the pupil)
   vec3 c = vec3(eyeTap(col, lon + dl.x, lat + dl.y, Z + dl.z, -rimA, 0.0).r, cg,
                 eyeTap(col, lon - dl.x, lat - dl.y, Z - dl.z, -rimA, 0.0).b);   // side taps skip the pupil
-  return mix(c, uToonCol, gCovP * gFillMax);
+  return mix(c, gScrC, gCovP * gFillMax);
 }
 
 void main(){
