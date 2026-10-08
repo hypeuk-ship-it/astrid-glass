@@ -388,9 +388,9 @@ void main(){
   gl_Position = vec4(aPos, 0.0, 1.0);
 }
 </script>
-<script src="coats.js?v=10081431"></script>
-<script src="springs.js?v=10081431"></script>
-<script src="face.js?v=10081431"></script>
+<script src="coats.js?v=10081500"></script>
+<script src="springs.js?v=10081500"></script>
+<script src="face.js?v=10081500"></script>
 <script>
 (function(){
 'use strict';
@@ -889,12 +889,16 @@ function blinkLife(){
   }
   if(GZ.glAt>0&&CK.simT>=GZ.glAt){ GZ.tx=GZ.fx; GZ.ty=GZ.fy; GZ.glAt=-1; }
 }
-/* ================= thinking (prototype) =================
+/* ================= thinking =================
    States: idle · listening · thinking · working · done (talk / error / searching / loading are planned, see
    /workspace/research/astrid-thinking-plan.md). Face motion = springs only: every change here sets a spring target.
    working = the pupil takeover: the pupil is instantly the whole white (scaled past it, clipped to the eye outline,
-   no sclera rim; glass.frag) and the screen is already up with its first lines. Text keeps typing for THINK_HOLD
-   (5 s). Then done: text fades, the pupil shrinks back, a slow satisfied blink + a little content.
+   no sclera rim; glass.frag). The screen is up immediately but EMPTY except a "$ " prompt and a cursor. The left
+   eye types the command one character at a time; a short run beat (blinking cursor + dots in the right eye); then
+   the right eye prints result lines one at a time. About 5 s of screen, a brief hold on the last line, then the
+   text fades and the pupil shrinks back with a slow satisfied blink.
+   While text is typed or printed, gaze tracks along that line left to right and saccades back to the next line
+   (and across to the right eye when the output arrives), spring-driven, like reading.
    Styles (?think=): crt (green phosphor, scanlines, glow) · mono (coat-tinted clean text) · amber (retro, block cursor)
    · min (no text: blinking cursor, typing dots, progress bar) · rain (falling glyphs). ?eyes=same|split. */
 const THINK_STYLES={
@@ -911,11 +915,12 @@ const THINK_SCRIPTS=[
   ['$ week','Mon 4','Tue 2','Wed \u2014'],
   ['$ find','lunch?','12:30','free'],
 ];
-const THINK_HOLD=5000;   // visible terminal, then the fade + shrink
+const THINK_HOLD=5000;   // screen budget: typing + run + results land by ~4.4 s, then a short hold
 const TH={state:'idle', style:THINK_STYLES[Q.get('think')]?Q.get('think'):'crt', eyes:Q.get('eyes')==='same'?'same':'split',
   take:spring(0,.1,.64), txt:spring(0,.15,.6), lidW:spring(0,.06,.78), pupS:spring(1,.08,.72),
   t0:0, phase:0, side:1, gx:0, gy:0, nextScan:0, flick:1,
   A:null, B:null, script:THINK_SCRIPTS[0].slice(), si:0, scriptN:0, queue:[], typing:null, ci:0, next:0, bar:null, waitAt:0,
+  mode:'idle', spin:'', readEye:'L', readU:0, saccade:0, sweepT:0, sweepDur:0, runN:0, useScript:true, holdAt:0, hes:null,
   dirty:true, drawnAt:-1e9, cphase:-1, rainT:0, prog:spring(0,.05,.75), demo:Q.get('demo')==='think'?'loop':'off', fg:'#fff', bg:'#000'};
 const mkBuf=()=>({lines:[], cur:'', scroll:spring(0,.22,.56), cursor:true});
 TH.A=mkBuf(); TH.B=mkBuf();
@@ -925,14 +930,26 @@ const sx=SCR.getContext('2d');
 const FONT='ui-monospace, Menlo, "SF Mono", "DejaVu Sans Mono", Consolas, monospace', FS=26, LH=31, BASEY=166, X0=48;
 /* the screen in canvas px (per eye half, 256×256): white centre (128,142), rx 101, top ry 142, bottom ry 104 */
 function thinkReset(){ [TH.A,TH.B].forEach(B=>{B.lines.length=0; B.cur=''; snap(B.scroll,0);});
-  TH.si=0; TH.typing=null; TH.bar=null; TH.next=CK.simT; TH.dirty=true; snap(TH.prog,0); }
-/* first command + first result are already on the screen; the rest types during the hold */
-function primeWorkingText(){
-  const scr=TH.script, outB=TH.eyes==='same'?TH.A:TH.B;
-  let i=0;
-  if(scr[0]&&String(scr[0]).startsWith('$ ')){ pushLine(TH.A, scr[0]); i=1; }
-  if(scr[i]&&!String(scr[i]).startsWith('$ ')&&scr[i]!=='#bar'){ pushLine(outB, scr[i]); i++; }
-  TH.si=i; TH.next=CK.simT;
+  TH.si=0; TH.typing=null; TH.bar=null; TH.spin=''; TH.mode='idle'; TH.readEye='L'; TH.readU=0; TH.saccade=0;
+  TH.sweepT=0; TH.sweepDur=0; TH.runN=0; TH.hes=null; TH.holdAt=0; TH.next=CK.simT; TH.dirty=true; snap(TH.prog,0); }
+/* "$ " is on screen immediately; the command itself is typed, never prefilled */
+function startTyping(cmd){
+  const lead=String(cmd).startsWith('$ ');
+  TH.typing=String(cmd); TH.ci=lead?2:0; TH.A.cur=lead?'$ ':''; TH.mode='type'; TH.spin='';
+  TH.readEye='L'; TH.readU=0; TH.saccade=8; TH.sweepDur=0;
+  const hes=new Set(), span=TH.typing.length-TH.ci;
+  if(span>=4) hes.add(TH.ci+Math.floor(span*0.45));          // a hesitation mid-word
+  if(span>=5) hes.add(TH.ci+span-1);                           // and one before the last character
+  TH.hes=hes; TH.next=CK.simT+140; TH.dirty=true;
+}
+function armScript(){
+  TH.bar=null; TH.typing=null; TH.spin=''; TH.runN=0; TH.holdAt=0;
+  const queued=TH.queue.length>0; TH.useScript=!queued;
+  let cmd=null;
+  if(queued && String(TH.queue[0]).startsWith('$ ')) cmd=TH.queue.shift();
+  else if(!queued && TH.script.length && String(TH.script[0]).startsWith('$ ')){ cmd=TH.script[0]; TH.si=1; }
+  if(cmd) startTyping(cmd);
+  else { TH.A.cur='$ '; TH.mode='run'; TH.runN=0; TH.readEye='R'; TH.readU=0; TH.saccade=8; TH.next=CK.simT+110; TH.dirty=true; }
 }
 function thinkState(s){
   if(s===TH.state) return;
@@ -941,35 +958,93 @@ function thinkState(s){
     const left=BR.t0+BR.dur-CK.simT; if(left>40) BR.dur+=left*.55; }   // stretch the breath already in progress
   if(s==='working'){
     if(prev!=='working') thinkReset();
-    // instant: full pupil screen + first text, no squeeze / grow / fade-in
+    // instant: full pupil screen, no prefilled text, no squeeze / grow / fade-in
     snap(TH.take,1); snap(TH.txt,1); TH.phase=2;
-    primeWorkingText();
+    armScript();
   }
+  if(s!=='working'){ yaw.k=.07; yaw.d=.74; pitch.k=.07; pitch.d=.74; }
   TH.dirty=true;
 }
 const pushLine=(B,s)=>{ B.lines.push(s); if(B.lines.length>14) B.lines.shift(); B.scroll.x+=LH; TH.dirty=true; };
-/* typing cadence: 45–110 ms per char, slower after a space, an occasional hesitation */
-const cadence=ch=>(ch===' '?90:45)+Math.random()*65+(Math.random()<.07?200+Math.random()*180:0);
+/* 90–140 ms per character; hesitations are scheduled on TH.hes (a pause BEFORE that character) */
+const charDelay=()=>90+Math.random()*50;
+function remainingUnits(){
+  let u=0;
+  if(TH.bar) u+=(8-TH.bar.n);
+  if(TH.useScript){ for(let i=TH.si;i<TH.script.length;i++) u+=TH.script[i]==='#bar'?8:2.4; }
+  for(let i=0;i<TH.queue.length;i++) u+=TH.queue[i]==='#bar'?8:2.4;
+  return u;
+}
+/* gap until the next output event. Shares the time left before 4.4 s across what's still coming;
+   the last line only gets a short read, then the hold. */
+function nextDelay(weight){
+  const budget=Math.max(0, 4400-(CK.simT-TH.t0));
+  const rest=remainingUnits();
+  if(rest<0.1) return 300;
+  return Math.max(70, Math.min(1400, budget/rest*weight));
+}
+function takeItem(){
+  if(TH.queue.length) return TH.queue.shift();
+  if(TH.useScript && TH.si<TH.script.length) return TH.script[TH.si++];
+  return undefined;
+}
 function runScript(){
+  if(TH.mode==='hold'||TH.mode==='idle') return;
   if(CK.simT<TH.next) return;
   const cmdB=TH.A, outB=TH.eyes==='same'?TH.A:TH.B;
-  if(TH.bar){                                              // progress bar line fills step by step (with stalls)
+  if(TH.mode==='type'){
+    if(TH.typing && TH.ci<TH.typing.length){
+      cmdB.cur+=TH.typing[TH.ci++]; TH.dirty=true;
+      const lead=TH.typing.startsWith('$ ')?2:0;
+      TH.readEye='L'; TH.readU=(TH.ci-lead)/Math.max(1,TH.typing.length-lead);
+      if(TH.ci>=TH.typing.length){
+        TH.mode='run'; TH.runN=0; TH.spin=''; TH.readEye=TH.eyes==='same'?'L':'R'; TH.readU=0; TH.saccade=12;
+        TH.next=CK.simT+110; return;
+      }
+      const pause=TH.hes&&TH.hes.has(TH.ci);   // hold BEFORE this upcoming character
+      TH.next=CK.simT+charDelay()+(pause?160+Math.random()*50:0);
+      return;
+    }
+    TH.mode='run'; TH.runN=0; TH.spin=''; TH.readEye=TH.eyes==='same'?'L':'R'; TH.readU=0; TH.saccade=12;
+    TH.next=CK.simT+110; TH.dirty=true; return;
+  }
+  if(TH.mode==='run'){                                         // ~400 ms: cursor blinks, dots arrive on the right
+    if(TH.runN>=3){
+      if(cmdB.cur){ pushLine(cmdB, cmdB.cur); cmdB.cur=''; }
+      if(TH.eyes!=='same') outB.cur='';
+      TH.spin=''; TH.mode='out'; TH.readU=0; TH.saccade=10; TH.sweepDur=0;
+      TH.next=CK.simT+80; TH.dirty=true; return;
+    }
+    TH.runN++; TH.spin='.'.repeat(TH.runN);
+    if(TH.eyes!=='same'){ outB.cur=TH.spin; }
+    TH.readEye=TH.eyes==='same'?'L':'R'; TH.readU=TH.runN/3; TH.dirty=true;
+    TH.next=CK.simT+110;
+    return;
+  }
+  if(TH.bar){                                              // progress bar fills one cell at a time; gaze tracks it
     const b=TH.bar; b.n++; outB.lines[outB.lines.length-1]='['+'#'.repeat(b.n)+'·'.repeat(8-b.n)+']'; TH.dirty=true;
-    TH.next=CK.simT+50+Math.random()*90+(Math.random()<.12?260:0);
-    if(b.n>=8){ TH.bar=null; TH.next+=180; }
+    TH.readEye=TH.eyes==='same'?'L':'R'; TH.readU=b.n/8;
+    if(b.n>=8){ TH.bar=null; TH.readU=0; TH.saccade=8; const d=nextDelay(2.4); TH.sweepT=CK.simT; TH.sweepDur=d*0.8; TH.next=CK.simT+d; }
+    else TH.next=CK.simT+nextDelay(1);
     return;
   }
-  if(TH.typing){
-    if(TH.ci<TH.typing.length){ const ch=TH.typing[TH.ci++]; cmdB.cur+=ch; TH.dirty=true; TH.next=CK.simT+cadence(ch); }
-    else { pushLine(cmdB,cmdB.cur); cmdB.cur=''; TH.typing=null; TH.next=CK.simT+140+Math.random()*160; }
-    return;
-  }
-  const item=TH.queue.length?TH.queue.shift():TH.script[TH.si++];
-  if(item===undefined){ TH.next=CK.simT+1e9; return; }   // hold the last lines; the 5 s timer ends the screen
-  if(item.startsWith('$ ')){ TH.typing=item; TH.ci=2; cmdB.cur='$ '; TH.dirty=true; TH.next=CK.simT+260+Math.random()*260; }
-  else if(item==='#bar'){ pushLine(outB,'[········]'); TH.bar={n:0}; TH.next=CK.simT+120; }
-  else { pushLine(outB,item); TH.next=CK.simT+70+Math.random()*150; }
-  TH.prog.t=Math.min(1,TH.si/TH.script.length);
+  const item=takeItem();
+  if(item===undefined){ TH.mode='hold'; TH.holdAt=CK.simT; TH.next=CK.simT+1e9; TH.sweepDur=0; return; }
+  if(String(item).startsWith('$ ')){ startTyping(item); return; }
+  if(item==='#bar'){ pushLine(outB,'[········]'); TH.bar={n:0}; TH.readEye=TH.eyes==='same'?'L':'R'; TH.readU=0; TH.saccade=8; TH.next=CK.simT+nextDelay(1); return; }
+  pushLine(outB,item);
+  TH.readEye=TH.eyes==='same'?'L':'R'; TH.readU=0; TH.saccade=9;
+  const d=nextDelay(2.4); TH.sweepT=CK.simT; TH.sweepDur=Math.max(120,d*0.8); TH.next=CK.simT+d;
+  const n=TH.useScript?TH.script.length:1; TH.prog.t=Math.min(1,TH.si/Math.max(1,n));
+}
+/* reading: pursuit along the active line, a stiffer spring for the return / cross-eye saccade */
+function applyRead(){
+  if(TH.mode==='out' && !TH.bar && TH.sweepDur>0) TH.readU=Math.min(1,(CK.simT-TH.sweepT)/TH.sweepDur);
+  const right=TH.readEye==='R' && TH.eyes!=='same';
+  const y0=right ? .10 : -.26, y1=right ? .28 : -.06, u=Math.max(0,Math.min(1,TH.readU||0));
+  TH.gx=y0+(y1-y0)*u; TH.gy=right ? -.03 : -.045;
+  if(TH.saccade>0){ yaw.k=.34; yaw.d=.55; pitch.k=.30; pitch.d=.60; TH.saccade--; }
+  else { yaw.k=.18; yaw.d=.68; pitch.k=.16; pitch.d=.72; }
 }
 function thinkTick(){
   const s=TH.state, T_=CK.simT-TH.t0, tk=TH.take;
@@ -982,11 +1057,14 @@ function thinkTick(){
     }
     else if(s==='done'&&T_>1800){ thinkState('idle'); if(TH.demo==='once') TH.demo='off'; }
   }
-  // takeover: already full the moment working starts (thinkState). Holds THINK_HOLD, then the fade.
+  // takeover: already full the moment working starts. Script plays out, holds briefly on the last line, then fades.
   if(s==='working'){
     TH.phase=2; tk.t=1; TH.txt.t=1;
     runScript();
-    if(T_>=THINK_HOLD) thinkState('done');
+    applyRead();
+    TH.prog.t=Math.max(TH.prog.t, Math.min(1,(CK.simT-TH.t0)/4400));
+    if(TH.mode==='hold' && CK.simT-TH.holdAt>=520) thinkState('done');
+    else if(T_>=6200) thinkState('done');
   } else if(s==='done'){
     if(TH.phase===0){ TH.txt.t=0; TH.phase=1; }
     if(TH.phase===1&&T_>230){ tk.k=.12; tk.d=.66; tk.t=0; TH.phase=2; }
@@ -1000,8 +1078,7 @@ function thinkTick(){
       TH.nextScan=CK.simT+260+Math.random()*560+(Math.random()<.2?700:0);
       if(Math.random()<.08) blink(480);                                      // a slow thinking blink now and then
     }
-  } else if(s==='working'){ if(CK.simT>=TH.nextScan){ TH.gx=(Math.random()*2-1)*.03; TH.gy=(Math.random()*2-1)*.02; TH.nextScan=CK.simT+1400+Math.random()*1400; } }
-  else if(s==='done'){ TH.gx=0; TH.gy=0; }
+  } else if(s==='done'){ TH.gx=0; TH.gy=0; yaw.k=.07; yaw.d=.74; pitch.k=.07; pitch.d=.74; }
   if(s!=='idle'&&!forced){ yaw.t=TH.gx; pitch.t=TH.gy; CK.pointerAt=CK.simT; }
   TH.lidW.t=s==='thinking'?.62:0;                                      // thinking squint only; the screen fills an open eye
   TH.pupS.t=s==='thinking'?.86:1;                                          // pupils narrow a touch while thinking
@@ -1014,7 +1091,7 @@ function thinkTick(){
   TH.flick=st.flick?1-st.flick*Math.random():1;
   const scrolling=Math.abs(TH.A.scroll.x)>.25||Math.abs(TH.B.scroll.x)>.25||Math.abs(TH.A.scroll.v)>.05;
   if(scrolling) TH.dirty=true;
-  const cph=Math.floor(CK.simT/530)&1; if(cph!==TH.cphase){ TH.cphase=cph; TH.dirty=true; }
+  const cph=Math.floor(CK.simT/(TH.mode==='run'?150:530))&1; if(cph!==TH.cphase){ TH.cphase=cph; TH.dirty=true; }
   if(TH.style==='rain'&&TH.take.x>.5){ rainTick(STEP*Math.max(0,Math.min(1,TH.txt.x+.3))); TH.dirty=true; }
   if(TH.style==='min') TH.dirty=true;
 }
@@ -1034,9 +1111,11 @@ function drawTerm(ox,B,showCursor){
   sx.font='bold '+FS+'px '+FONT; sx.textBaseline='alphabetic';
   sx.shadowColor=TH.fg; sx.shadowBlur=st.glow; sx.fillStyle=TH.fg;
   const by=BASEY+B.scroll.x, x0=ox+X0;
-  sx.globalAlpha=1; sx.fillText(B.cur,x0,by);
-  const cursorOn=showCursor&&(TH.typing&&B===TH.A?true:TH.cphase===0);
-  if(cursorOn&&st.cursor!=='none'){ const w=sx.measureText(B.cur).width;
+  let shown=B.cur;
+  if(B===TH.A && TH.mode==='run' && TH.eyes==='same' && TH.spin) shown=B.cur+(B.cur?' ':'')+TH.spin;
+  sx.globalAlpha=1; sx.fillText(shown,x0,by);
+  const cursorOn=!!showCursor;
+  if(cursorOn&&st.cursor!=='none'){ const w=sx.measureText(shown).width;
     if(st.cursor==='block') sx.fillRect(x0+w+1,by-FS*.78,FS*.58,FS*.98); else sx.fillRect(x0+w+1,by-FS*.8,3,FS); }
   for(let i=B.lines.length-1,y=by-LH;i>=0&&y>-LH;i--,y-=LH){
     // lines dissolve as they scroll up into the narrow top of the egg (porthole), instead of being cut at the sides
@@ -1076,8 +1155,11 @@ function thinkDraw(){
   const st=TH.style;
   if(st==='rain'){ drawRain(0,0); drawRain(256,1); TH.rainT=CK.simT; }
   else if(st==='min'){ drawMin(0); sx.drawImage(SCR,0,0,512,512,256,0,256,256); }
-  else if(TH.eyes==='same'){ drawTerm(0,TH.A,true); sx.drawImage(SCR,0,0,512,512,256,0,256,256); }
-  else { drawTerm(0,TH.A,!!TH.typing||TH.queue.length===0); drawTerm(256,TH.B,!TH.typing); }
+  else if(TH.eyes==='same'){ drawTerm(0,TH.A,TH.mode==='type'||(TH.mode==='run'&&TH.cphase===0)); sx.drawImage(SCR,0,0,512,512,256,0,256,256); }
+  else {
+    drawTerm(0,TH.A,TH.mode==='type'||(TH.mode==='run'&&TH.cphase===0));
+    drawTerm(256,TH.B,TH.mode==='run'&&TH.cphase===0);
+  }
   sx.globalAlpha=1;
 }
 function thinkUpload(){
@@ -1382,7 +1464,7 @@ window.__astrid={
   think:t=>{ const L=Array.isArray(t)?t:String(t).split('\n'); TH.queue.push(...L.filter(x=>x!=null)); if(TH.state!=='working') thinkState('working'); return TH.queue.length; },
   thinkStyle:s=>{ if(THINK_STYLES[s]){ TH.style=s; TH.dirty=true; } return TH.style; },
   thinkEyes:e=>{ TH.eyes=e==='same'?'same':'split'; TH.dirty=true; return TH.eyes; },
-  thinkInfo:()=>({state:TH.state,style:TH.style,eyes:TH.eyes,take:TH.take.x,txt:TH.txt.x,phase:TH.phase,si:TH.si,A:TH.A.lines.slice(),B:TH.B.lines.slice()}),
+  thinkInfo:()=>({state:TH.state,style:TH.style,eyes:TH.eyes,take:TH.take.x,txt:TH.txt.x,phase:TH.phase,mode:TH.mode,si:TH.si,t:Math.round(CK.simT-TH.t0),yaw:+yaw.x.toFixed(3),pitch:+pitch.x.toFixed(3),eye:TH.readEye,u:+(TH.readU||0).toFixed(2),Acur:TH.A.cur,Bcur:TH.B.cur,spin:TH.spin,A:TH.A.lines.slice(),B:TH.B.lines.slice(),lid:+lid.x.toFixed(2)}),
   drive,trace,bench,blinkNow:()=>blink(),holdBlinks:v=>{ nextBlink=v?1e12:CK.simT+800; },snapLid:v=>snap(lid,v),kick:()=>{pushUniforms(); draw();},
   toon:()=>({a:1,px:pupX.x,py:pupY.x,yaw:yaw.x,pitch:pitch.x,dil:pupD.x,stretch:pStr.x,armed:PSV.armed,sdx:PSV.dx,sdy:PSV.dy,contain:[TO.cuL,TO.cvL,TO.cuR,TO.cvR]}),
   pet:()=>({down:pet.down,content:pet.content,happy:happy.x,lid:lid.x,roll:roll.x,press:press.x,body:bodyA.x,breath:breath.x,revs:pet.revs.length,lastTickle:pet.lastTickle,simT:CK.simT,voice:Voice.stats()}),
