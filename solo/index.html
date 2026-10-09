@@ -1308,7 +1308,7 @@ bar.appendChild(thinkBtn); TH._btn=thinkBtn;
    Sad: long holds + rare slow weighted head-dip (not yes-nods) + heavy blinks + down gaze.
    Angry: sharp gaze-dart bursts + occasional forward size-lean + short hard blinks.
    Surprised: freeze → head yaw turn (pupils lag) → side-eye glance opposite → hold → home; rare gasp pop. Wide lids held.
-   Sleepy: sticky slow blinks + rare head-drop with doze-catch rebound.
+   Sleepy: very slow sticky blinks (long close, long nearly-shut hold, slow open) + rare head-drop with doze-catch rebound.
    Think still owns the face while it runs: emoGate snaps shut for thinking / working / done and eases
    back to whatever was held. Optional ?love=m2|m3|m4|3 debug glow strength only. */
 const EMO_K=.12, EMO_D=.72;
@@ -1754,8 +1754,11 @@ function emoTick(){
     }
   }
   if(!busy&&EM.name==='sleepy'){
-    lid.k=.12; lid.d=.68;
-    BK.ck=.10; BK.cd=.68; BK.k=.035; BK.d=.78; BK.h=240;             // sticky shut
+    // very slow blink: long close → long nearly-shut hold → even slower open (sticky doze)
+    if(CK.simT<blinkUntil){ lid.k=.006; lid.d=.93; }                 // close + hold
+    else if(lid.x<.92){ lid.k=.0015; lid.d=.97; }                    // slow reopen
+    else { lid.k=.10; lid.d=.72; }                                    // settled open
+    BK.ck=.006; BK.cd=.93; BK.k=.002; BK.d=.96; BK.h=780;             // long sticky nearly-shut
   } else if(!busy&&EM.name==='sad'){
     lid.k=.14; lid.d=.70;
     BK.ck=.14; BK.cd=.66; BK.k=.042; BK.d=.76; BK.h=170;             // heavy, not sticky
@@ -1803,7 +1806,7 @@ function tick(){            // one fixed 60 Hz step of the whole motion model
       const ang=EM.name==='angry'&&free;
       const sur=EM.name==='surprised'&&free;
       if(TH.state!=='thinking'){
-        if(sleepy) blink(920);                                      // sticky almost-shut
+        if(sleepy) blink(2800);                                     // covers long close+hold; blinkLife ends it
         else if(sad) blink(520);                                    // heavy complete blink
         else if(ang) blink(75);                                     // hard short
         else if(sur) blink(90);                                     // rare quick
@@ -1813,8 +1816,8 @@ function tick(){            // one fixed 60 Hz step of the whole motion model
         }
         else { blink(110); if(Math.random()<.18) doubleAt=CK.simT+260; }
       }
-      const base = sleepy?3800:sad?3000:ang?1700:sur?5500:hap?1600:2800;
-      const span = sleepy?2400:sad?1800:ang?900:sur?2800:hap?1200:3400;
+      const base = sleepy?4200:sad?3000:ang?1700:sur?5500:hap?1600:2800;
+      const span = sleepy?2800:sad?1800:ang?900:sur?2800:hap?1200:3400;
       nextBlink=CK.simT+base+Math.random()*span;
     }
     if(doubleAt>0&&CK.simT>=doubleAt){ blink(); doubleAt=-1; }
@@ -1825,7 +1828,7 @@ function tick(){            // one fixed 60 Hz step of the whole motion model
   emoLoopTick();
   emoTick();
   // blink: the lid comes down from the top; happy: a soft squint (face.js eyeShapeV)
-  lid.t=(CK.simT<blinkUntil)?0:1-.5*Math.max(0,Math.min(1,happy.x));
+  lid.t=(CK.simT<blinkUntil)?(EM.name==="sleepy"?0.06:0):1-.5*Math.max(0,Math.min(1,happy.x));  // sleepy: hang nearly shut
   step(yaw);step(pitch);step(size);step(lid);
   if(!forced){
     // LOOP.px/py override pupil targets (surprised side-eye: head≠eyes). Else pupils track gaze target.
