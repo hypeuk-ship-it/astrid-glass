@@ -88,7 +88,7 @@ uniform vec4  uRot;     // eyes: cos yaw, sin yaw, cos pitch, sin pitch
 uniform vec4  uEyeP;    // eyes: -, -, lidFade (morph-blended), capsule radius (units)
 uniform vec4  uEyeA;    // eye box (radians): half width, half visible height, 1/hw, 1/hh
 uniform vec4  uShapeC;  // eye (radians): centre offset (happy squint), blink lid line (rel. to centre), lid corner k, rest lon (±)
-uniform vec4  uAsym;    // 3/4 asymmetry: width scale ±(1 + side·x), height offset (side·y); expression-lid height z, -
+uniform vec4  uAsym;    // 3/4 asymmetry: width scale ±(1 + side·x), height offset (side·y); expression-lid height z, height scale ±(1 + side·w)
 uniform vec4  uCutN;    // expression-lid line normal: left eye (xy), right eye (zw)
 uniform vec4  uLat;     // fixed lattice warp: 1/k of the bottom row inner, mid, outer; 1/(1.4·hw)
 uniform vec4  uToon;    // toon layer: rim alpha (0 = off → skipped), pupil alpha (0 = off), -, -
@@ -148,7 +148,8 @@ float smax(float a, float c, float k){ float h = max(k - abs(a - c), 0.0) / k; r
 // rp = rim transform applied after the shared lattice warp (outward, up, scale; vec3(0,0,1) = the white itself).
 float eyeSDF(vec2 p, vec2 b, float side, vec3 rp){
   float sx = 1.0 + side * uAsym.x;
-  p.y += side * uAsym.y; p.x /= sx;
+  float sy = max(0.35, 1.0 + side * uAsym.w);
+  p.y += side * uAsym.y; p.x /= sx; p.y /= sy;
   p.y -= uShapeC.x;
   vec2 ib = uEyeA.zw;
   float f = clamp(-side * p.x * uLat.w, -1.0, 1.0);
@@ -163,7 +164,7 @@ float eyeSDF(vec2 p, vec2 b, float side, vec3 rp){
   vec2 pl = p - ro;                                    // lid lines ride with the rim (lash line)
   vec2 cn = side < 0.0 ? uCutN.xy : uCutN.zw;
   d = max(d, dot(pl, cn) - uAsym.z);                   // expression lid (debug sliders; parked far above = none)
-  return smax(d, pl.y - uShapeC.y, uShapeC.z) * min(sx, 1.0);
+  return smax(d, pl.y - uShapeC.y, uShapeC.z) * min(min(sx, sy), 1.0);
 }
 
 // pupil coverage (unclipped), computed by the centre tap (always called first) and reused by the two side
@@ -210,14 +211,15 @@ vec3 eyeTap(vec3 col, float lon, float lat, float Z, float rimA, float pc){
   // side taps reuse its coverage.
   if (uToon.y > 0.0 && pc > 0.5) {
     float psx = 1.0 + side * uAsym.x;
+    float psy = max(0.35, 1.0 + side * uAsym.w);
     vec2 pc2 = side < 0.0 ? uPupilC.xy : uPupilC.zw;
-    vec2 pq = uPupilM * vec2(u / psx + side * uPupil.x - uPupil.y - pc2.x, v + side * uAsym.y - uPupil.z - pc2.y);
+    vec2 pq = uPupilM * vec2(u / psx + side * uPupil.x - uPupil.y - pc2.x, (v + side * uAsym.y - uPupil.z - pc2.y) / psy);
     float nw = max(uEmo.z, 0.3);                               // < 1 narrows the pupil (angry)
     pq.x /= nw;
     vec2 p0 = pq * uPupilA.zw, p1 = p0 * uPupilA.zw;           // gradient-normalised ellipse
     float pk = length(p0);
     float dp = pk * (pk - 1.0) * inversesqrt(max(dot(p1, p1), 1e-8));
-    dp *= min(psx, 1.0) * uPupil.w * nw * RR * (0.5 * Z + 0.5);
+    dp *= min(min(psx, psy), 1.0) * uPupil.w * nw * RR * (0.5 * Z + 0.5);
     vec3 pcol = uToonCol;
     if (uScr.x > 0.0) {
       // the screen: pupil ∩ eye outline. uScr.y ≤ 0 pushes the clip past the white so the sclera is gone;
@@ -1309,9 +1311,9 @@ bar.appendChild(thinkBtn); TH._btn=thinkBtn;
    Angry: sharp gaze-dart bursts + occasional forward size-lean + short hard blinks.
    Surprised: freeze → head yaw turn (pupils lag) → side-eye glance opposite → hold → home; rare gasp pop. Wide lids held.
    Sleepy: FIGHTING sleep pass 4 — same lose→stick→catch→wide→sag; slow sticky blink clamped to SLEEPY_LID_FLOOR (never full close / never eyes disappear).
-   Concerned: soft care (partial sad+angry lids, not a glare); slow blinks, tiny L/R gaze checks, rare soft roll tilt.
+   Concerned: soft care (partial sad+angry lids, not a glare); slow blinks, tiny L/R gaze checks, rare soft roll tilt. Size×height-exp: ?concerned=a|b|c.
    Listening: attentive sit — lids a touch wider, gaze locked to user, very still; rare micro nod + soft blink.
-   Confused: asymmetric lid (partial angry) + slight lift; rare double-take gaze + soft roll tilt, then recover.
+   Confused: C6d soft lids (sad+tired, almost no angry) + mild one-eye height asym; rare double-take gaze + soft roll tilt, then recover. Debug size×height: ?confused=a|b|c|c1..c6|c6a..c6f.
    Think still owns the face while it runs: emoGate snaps shut for thinking / working / done and eases
    back to whatever was held. Optional ?love=m2|m3|m4|3 debug glow strength only. */
 const EMO_K=.12, EMO_D=.72;
@@ -1834,21 +1836,84 @@ function emoLoopTick(){
   else { joy.t=1; step(joy); step(wPulse); }
 }
 const EMOS={
-  neutral:   {sad:0, angry:0, tired:0, arc:0, lift:0, pup:1, narrow:1, warm:0, smile:0, gx:null, gy:null, size:1},
-  happy:     {sad:0, angry:0, tired:0, arc:1, lift:1, pup:1, narrow:1, warm:.12, smile:1, gx:0, gy:-.05, size:1.04},
-  sad:       {sad:1, angry:0, tired:0, arc:0, lift:0, pup:.78, narrow:1, warm:0, smile:0, gx:0, gy:.26, size:1},
-  angry:     {sad:0, angry:1, tired:0, arc:0, lift:0, pup:.92, narrow:.48, warm:0, smile:0, gx:0, gy:.06, size:.98},
-  surprised: {sad:0, angry:0, tired:0, arc:0, lift:.35, pup:.46, narrow:1, warm:0, smile:0, gx:0, gy:-.18, size:1.14},
-  sleepy:    {sad:0, angry:0, tired:1, arc:0, lift:0, pup:1.24, narrow:1, warm:0, smile:0, gx:0, gy:.18, size:1},
+  neutral:   {sad:0, angry:0, tired:0, arc:0, lift:0, pup:1, narrow:1, warm:0, smile:0, gx:null, gy:null, size:1, asym:0},
+  happy:     {sad:0, angry:0, tired:0, arc:1, lift:1, pup:1, narrow:1, warm:.12, smile:1, gx:0, gy:-.05, size:1.04, asym:0},
+  sad:       {sad:1, angry:0, tired:0, arc:0, lift:0, pup:.78, narrow:1, warm:0, smile:0, gx:0, gy:.26, size:1, asym:0},
+  angry:     {sad:0, angry:1, tired:0, arc:0, lift:0, pup:.92, narrow:.48, warm:0, smile:0, gx:0, gy:.06, size:.98, asym:0},
+  surprised: {sad:0, angry:0, tired:0, arc:0, lift:.35, pup:.46, narrow:1, warm:0, smile:0, gx:0, gy:-.18, size:1.14, asym:0},
+  sleepy:    {sad:0, angry:0, tired:1, arc:0, lift:0, pup:1.24, narrow:1, warm:0, smile:0, gx:0, gy:.18, size:1, asym:0},
   // love = happy face + M1 glow decoration only (rim + mauve pool). Same springs targets as happy.
-  love:      {sad:0, angry:0, tired:0, arc:1, lift:1, pup:1, narrow:1, warm:.12, smile:1, gx:0, gy:-.05, size:1.04},
+  love:      {sad:0, angry:0, tired:0, arc:1, lift:1, pup:1, narrow:1, warm:.12, smile:1, gx:0, gy:-.05, size:1.04, asym:0},
   // concerned = soft care (partial sad+angry lids, not full glare); pupils a bit smaller; gaze down-forward; soft warm-neutral.
-  concerned:{sad:.22, angry:.38, tired:.08, arc:0, lift:0, pup:.84, narrow:.72, warm:.05, smile:.10, gx:0, gy:.14, size:1},
+  // Default kept until size×height-exp pick. Debug: ?concerned=a|b|c|c1..c6 (size × height / soft lids).
+  concerned:{sad:.22, angry:.38, tired:.08, arc:0, lift:0, pup:.84, narrow:.72, warm:.05, smile:.10, gx:0, gy:.14, size:1, height:1, asym:0, hAsym:0},
   // listening = attentive sit: lids a touch wider (lift), gaze locked to user, still.
-  listening: {sad:0, angry:0, tired:0, arc:0, lift:.22, pup:.92, narrow:1, warm:0, smile:0, gx:0, gy:-.06, size:1.03},
-  // confused = huh: asymmetric lids via partial angry, slight lift; pupils search in the loop.
-  confused:  {sad:.12, angry:.48, tired:0, arc:0, lift:.12, pup:.78, narrow:.70, warm:0, smile:0, gx:0, gy:-.04, size:1.04},
+  listening: {sad:0, angry:0, tired:0, arc:0, lift:.22, pup:.92, narrow:1, warm:0, smile:0, gx:0, gy:-.06, size:1.03, asym:0},
+  // confused = soft huh (C6d shipped): soft lids (more sad+tired, almost no angry), mild one-eye height asym, size+height bump.
+  // Debug still: ?confused=a|b|c|c1..c6|c6a..c6f (size × height / one-eye height asym).
+  confused:  {sad:.36, angry:.02, tired:.14, arc:0, lift:.16, pup:.72, narrow:1.0, warm:.06, smile:.06, gx:0, gy:-.02, size:1.16, height:1.14, asym:0, hAsym:.18},
 };
+/* Eye SIZE × HEIGHT experiment. size = overall scale; height = vertical aperture.
+   Angry stays short+small ref (size .98, narrow .48, height 1 with hard lids). Soft lids on variants.
+   Confused default = C6d (shipped). Pick with ?concerned=a|b|c|c1..c6 and/or ?confused=a|b|c|c1..c6|c6a..c6f. */
+const CONCERNED_SIZE={
+  // A: modest bigger + shorter aperture (soft care, not glare)
+  a:{sad:.32, angry:.14, tired:.12, arc:0, lift:.04, pup:.76, narrow:.94, warm:.06, smile:.12, gx:0, gy:.12, size:1.08, height:.88, asym:0, hAsym:0},
+  // B: bigger + slightly taller open (clear soft worry)
+  b:{sad:.34, angry:.12, tired:.12, arc:0, lift:.08, pup:.68, narrow:.96, warm:.08, smile:.14, gx:0, gy:.12, size:1.14, height:1.06, asym:0, hAsym:0},
+  // C: largest + tallest open worry (soft lids, tiny pupils) — base for C1–C6
+  c:{sad:.30, angry:.08, tired:.14, arc:0, lift:.12, pup:.62, narrow:1.0, warm:.08, smile:.12, gx:0, gy:.10, size:1.20, height:1.16, asym:0, hAsym:0},
+  // C1: taller aperture (more open whites) from C
+  c1:{sad:.30, angry:.06, tired:.14, arc:0, lift:.14, pup:.60, narrow:1.0, warm:.08, smile:.12, gx:0, gy:.10, size:1.20, height:1.28, asym:0, hAsym:0},
+  // C2: shorter aperture (still soft, less tall)
+  c2:{sad:.32, angry:.08, tired:.16, arc:0, lift:.10, pup:.64, narrow:1.0, warm:.08, smile:.12, gx:0, gy:.12, size:1.20, height:1.04, asym:0, hAsym:0},
+  // C3: bigger overall scale, same height
+  c3:{sad:.30, angry:.06, tired:.14, arc:0, lift:.12, pup:.58, narrow:1.0, warm:.08, smile:.12, gx:0, gy:.10, size:1.30, height:1.16, asym:0, hAsym:0},
+  // C4: softer lids (more sad+tired, almost no angry) + slightly larger pupils
+  c4:{sad:.42, angry:.02, tired:.20, arc:0, lift:.10, pup:.74, narrow:1.0, warm:.10, smile:.14, gx:0, gy:.12, size:1.20, height:1.16, asym:0, hAsym:0},
+  // C5: down-forward gaze care (looks at the problem), tiny pupils
+  c5:{sad:.34, angry:.06, tired:.16, arc:0, lift:.08, pup:.54, narrow:1.0, warm:.06, smile:.10, gx:.05, gy:.22, size:1.18, height:1.14, asym:0, hAsym:0},
+  // C6: warm soft open — slight size+height bump, softer lids, warmer smile
+  c6:{sad:.36, angry:.04, tired:.16, arc:0, lift:.16, pup:.70, narrow:1.0, warm:.14, smile:.18, gx:0, gy:.08, size:1.24, height:1.22, asym:0, hAsym:0},
+};
+const CONFUSED_SIZE={
+  // A: bigger + taller symmetric huh (soft lids)
+  a:{sad:.18, angry:.16, tired:0, arc:0, lift:.18, pup:.68, narrow:.92, warm:0, smile:0, gx:0, gy:-.04, size:1.10, height:1.08, asym:0, hAsym:0},
+  // B: bigger + shorter aperture (compressed huh, still soft)
+  b:{sad:.16, angry:.14, tired:.04, arc:0, lift:.16, pup:.60, narrow:.94, warm:0, smile:0, gx:.04, gy:-.06, size:1.16, height:.90, asym:0, hAsym:0},
+  // C: one-eye HEIGHT asym (left taller / right shorter) + soft lids — base for C1–C6
+  c:{sad:.20, angry:.12, tired:0, arc:0, lift:.20, pup:.58, narrow:.96, warm:0, smile:0, gx:0, gy:-.02, size:1.12, height:1.08, asym:0, hAsym:.32},
+  // C1: taller aperture (more open whites), same size + hAsym
+  c1:{sad:.20, angry:.10, tired:0, arc:0, lift:.22, pup:.56, narrow:.96, warm:0, smile:0, gx:0, gy:-.02, size:1.12, height:1.22, asym:0, hAsym:.32},
+  // C2: shorter aperture (still soft, less tall)
+  c2:{sad:.22, angry:.12, tired:.04, arc:0, lift:.16, pup:.60, narrow:.96, warm:0, smile:0, gx:0, gy:-.02, size:1.12, height:.96, asym:0, hAsym:.32},
+  // C3: bigger overall scale, same height + hAsym
+  c3:{sad:.20, angry:.10, tired:0, arc:0, lift:.20, pup:.54, narrow:.96, warm:0, smile:0, gx:0, gy:-.02, size:1.24, height:1.08, asym:0, hAsym:.32},
+  // C4: softer lids (more sad, almost no angry) + slightly larger pupils
+  c4:{sad:.34, angry:.04, tired:.10, arc:0, lift:.18, pup:.68, narrow:.98, warm:0, smile:0, gx:0, gy:-.02, size:1.12, height:1.08, asym:0, hAsym:.32},
+  // C5: stronger one-eye height asym (more huh)
+  c5:{sad:.20, angry:.10, tired:0, arc:0, lift:.22, pup:.56, narrow:.96, warm:0, smile:0, gx:.04, gy:-.04, size:1.12, height:1.08, asym:0, hAsym:.48},
+  // C6: gentler huh — milder hAsym, slight size+height bump, soft lids — base for C6a–C6f
+  c6:{sad:.24, angry:.06, tired:.06, arc:0, lift:.18, pup:.64, narrow:.98, warm:.04, smile:.04, gx:0, gy:-.02, size:1.16, height:1.14, asym:0, hAsym:.18},
+  // C6a: taller aperture from C6
+  c6a:{sad:.24, angry:.05, tired:.06, arc:0, lift:.20, pup:.62, narrow:.98, warm:.04, smile:.04, gx:0, gy:-.02, size:1.16, height:1.26, asym:0, hAsym:.18},
+  // C6b: shorter aperture from C6
+  c6b:{sad:.26, angry:.06, tired:.08, arc:0, lift:.16, pup:.66, narrow:.98, warm:.04, smile:.04, gx:0, gy:-.02, size:1.16, height:1.02, asym:0, hAsym:.18},
+  // C6c: bigger overall scale from C6
+  c6c:{sad:.24, angry:.05, tired:.06, arc:0, lift:.18, pup:.60, narrow:.98, warm:.04, smile:.04, gx:0, gy:-.02, size:1.28, height:1.14, asym:0, hAsym:.18},
+  // C6d: softer lids (more sad+tired, almost no angry) — SHIPPED as EMOS.confused default
+  c6d:{sad:.36, angry:.02, tired:.14, arc:0, lift:.16, pup:.72, narrow:1.0, warm:.06, smile:.06, gx:0, gy:-.02, size:1.16, height:1.14, asym:0, hAsym:.18},
+  // C6e: milder hAsym (even gentler huh)
+  c6e:{sad:.24, angry:.05, tired:.06, arc:0, lift:.18, pup:.64, narrow:.98, warm:.04, smile:.04, gx:0, gy:-.02, size:1.16, height:1.14, asym:0, hAsym:.08},
+  // C6f: warmer rounder — more warm/smile/lift, slightly larger pupils
+  c6f:{sad:.22, angry:.04, tired:.08, arc:0, lift:.22, pup:.70, narrow:1.0, warm:.10, smile:.10, gx:0, gy:0, size:1.18, height:1.16, asym:0, hAsym:.16},
+};
+(function applySizeExp(){
+  const cq=(Q.get('concerned')||'').toLowerCase();
+  const uq=(Q.get('confused')||'').toLowerCase();
+  if(CONCERNED_SIZE[cq]) Object.assign(EMOS.concerned, CONCERNED_SIZE[cq]);
+  if(CONFUSED_SIZE[uq]) Object.assign(EMOS.confused, CONFUSED_SIZE[uq]);
+})();
 // Love glow strength. Default M1 = 1.15. Debug: ?love=m2|m3|m4|3
 const LOVE_Z=({'3':1,'glow':1,m1:1.15,m2:1.25,m3:1.35,m4:1.45})[Q.get('love')]||1.15;
 const EM={name:'neutral', wasBusy:false, pop:0, btns:{}};
@@ -2137,7 +2202,11 @@ function pushUniforms(){
   // pulse must actually deepen the smile: raise arc ceiling and pulse weights so peaks read as joy
   const lift=.035*hp+.028*eLift+.022*ePulse, arc=Math.min(.58,.15*hp+.32*eArc+.16*ePulse);
   // ePulse briefly rides the content-squint channel so smile pulses actually squeeze the whites
-  EV3[0]=at(size,a)*T.eyeScale; EV3[1]=at(lid,a); EV3[2]=0; EV3[3]=Math.min(1,hp+.45*ePulse); EV3[4]=T.lopsided;
+  // emotion asym (confused one-eye-larger etc.) rides on top of the debug lopsided slider
+  const eAsym=Math.max(0,Math.min(1.5,(emoSpec().asym||0)*gate));
+  // EV3[2] = eye HEIGHT (vertical aperture), gated with emotion; independent of overall size
+  const eHeight=1+((emoSpec().height||1)-1)*gate;
+  EV3[0]=at(size,a)*T.eyeScale; EV3[1]=at(lid,a); EV3[2]=eHeight; EV3[3]=Math.min(1,hp+.45*ePulse); EV3[4]=Math.min(1.5,T.lopsided+eAsym);
   const clamp1=v=>Math.max(0,Math.min(1,v));
   EV3[5]=clamp1(T.lidSad+at(wSad,a)*gate); EV3[6]=clamp1(T.lidAngry+at(wAngry,a)*gate);
   EV3[7]=clamp1(T.lidTired+Math.max(0,at(TH.lidW,a))+at(wTired,a)*gate);
@@ -2146,7 +2215,9 @@ function pushUniforms(){
   vEyeA[0]=Math.max(ehw,.004); vEyeA[1]=Math.max(ehh,.004); vEyeA[2]=1/vEyeA[0]; vEyeA[3]=1/vEyeA[1]; gl.uniform4fv(U.uEyeA,vEyeA);
   const eoy=EYE.oy;
   vShapeC[0]=eoy; vShapeC[1]=EYE.vtop; vShapeC[2]=EYE.ck; vShapeC[3]=lonR; gl.uniform4fv(U.uShapeC,vShapeC);
-  vAsym[0]=EYE.asx; vAsym[1]=EYE.asy; vAsym[2]=EYE.cut; vAsym[3]=EYE.cutk; gl.uniform4fv(U.uAsym,vAsym);   // 3/4 asymmetry + lid line
+  // uAsym.w = per-eye HEIGHT scale asym (1 + side·w); cutk stays CPU-only (shader unused)
+  const eHAsym=Math.max(-.6,Math.min(.6,(emoSpec().hAsym||0)*gate));
+  vAsym[0]=EYE.asx; vAsym[1]=EYE.asy; vAsym[2]=EYE.cut; vAsym[3]=eHAsym; gl.uniform4fv(U.uAsym,vAsym);   // 3/4 + lid cut + height asym
   vCutN[0]=EYE.nLx; vCutN[1]=EYE.nLy; vCutN[2]=EYE.nRx; vCutN[3]=EYE.nRy; gl.uniform4fv(U.uCutN,vCutN);
   // fixed lattice warp: 1/k per bottom-row column
   vLat[0]=1/EL.lki; vLat[1]=1/EL.lkm; vLat[2]=1/EL.lko; vLat[3]=1/(1.4*Math.max(ehw,1e-4)); gl.uniform4fv(U.uLat,vLat);
@@ -2343,6 +2414,9 @@ const trace=steps=>{stop(); const r=[]; driveSteps(steps,r); return JSON.stringi
 window.__astrid={
   state:s=>{ if(s!=null) thinkState(s); return TH.state; },
   emotion:name=>{ if(name!=null) setEmotion(name); return EM.name; },
+  emoSpec:()=>({...emoSpec()}),
+  sizeExp:{concerned:CONCERNED_SIZE,confused:CONFUSED_SIZE},
+  applySizeExp:(emo,key)=>{ const tab=emo==='confused'?CONFUSED_SIZE:CONCERNED_SIZE; if(!tab[key]||!EMOS[emo]) return null; Object.assign(EMOS[emo],tab[key]); if(EM.name===emo){ emoApplyTargets(); size.t=emoSpec().size*Math.max(.9,joy.x); } return {...EMOS[emo]}; },
   loop:()=>({emo:EM.name,armed:LOOP.armed,kind:LOOP.kind,phase:LOOP.phase,gaze:[+LOOP.x.toFixed(3),+LOOP.y.toFixed(3)],pup:[LOOP.px==null?null:+LOOP.px.toFixed(3),LOOP.py==null?null:+LOOP.py.toFixed(3)],breath:+pupBreath.x.toFixed(4),amp:HLB.amp,joy:+joy.x.toFixed(4),zoomTo:+HAP.zoomTo.toFixed(3),pulse:+wPulse.x.toFixed(3),sq:SQ.phase,hap:HAP.phase,burst:HAP.burst,count:HAP.count,nodAmp:+HAP.amp.toFixed(3),nextHap:Math.round(HAP.until-CK.simT),act:ACT.phase,actCount:ACT.count,actAmp:+ACT.amp.toFixed(3),actSide:ACT.side,nextAct:Math.round(ACT.until-CK.simT),yaw:+yaw.x.toFixed(4),pitch:+pitch.x.toFixed(4),gYaw:+gYaw.x.toFixed(4),gPitch:+gPitch.x.toFixed(4),pupX:+pupX.x.toFixed(4),pupY:+pupY.x.toFixed(4),size:+size.x.toFixed(4),nextBlink:Math.round(nextBlink-CK.simT),nextPulse:Math.round(SQ.until-CK.simT)}),
   think:t=>{ const L=Array.isArray(t)?t:String(t).split('\n'); TH.queue.push(...L.filter(x=>x!=null)); if(TH.state!=='working') thinkState('working'); return TH.queue.length; },
   thinkStyle:s=>{ if(THINK_STYLES[s]){ TH.style=s; TH.dirty=true; } return TH.style; },

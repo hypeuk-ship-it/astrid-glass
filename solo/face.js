@@ -53,14 +53,16 @@
     o.nLx=-Math.sin(pL); o.nLy=Math.cos(pL); o.nRx=-Math.sin(pR); o.nRy=Math.cos(pR);
     return o;
   }
-  /* eye box for this frame. v = [size, lid, -, happy, asymmetry, lidSad, lidAngry, lidTired].
+  /* eye box for this frame. v = [size, lid, height, happy, asymmetry, lidSad, lidAngry, lidTired].
      Writes o.hw, o.hh (half width / height, radians), o.fade, o.oy (centre offset: a happy squint shrinks the eye
      toward its bottom, so the centre drops), o.vtop (blink lid line rel. to the centre: 1.25·hh above when open →
      the bottom when shut), o.ck (lid corner), plus the cutFrame fields. */
   function eyeShapeV(o,v){
     const s=Math.max(0,v[0]), l=Math.max(0,v[1]);
+    // v[2] = vertical aperture scale (eye HEIGHT), independent of overall size. 0/missing => 1.
+    const hs=(v[2]>1e-6)?Math.max(.35,v[2]):1;
     const hp=clamp(v[3]||0,0,1), sc=1-EYE.sq*hp;                      // happy squint: shrink toward the bottom
-    const hwN=EYE.w*s/2, hhN=EYE.h*s/2;
+    const hwN=EYE.w*s/2, hhN=EYE.h*s*hs/2;
     o.hw=hwN*sc; o.hh=hhN*sc;
     o.oy=-hhN*(1-sc);                                                  // the bottom stays where it was
     const lb=clamp(l/Math.max(.2,1-.5*hp),0,1);                        // the lid with the squint factored out

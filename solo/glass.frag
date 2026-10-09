@@ -37,7 +37,7 @@ uniform vec4  uRot;     // eyes: cos yaw, sin yaw, cos pitch, sin pitch
 uniform vec4  uEyeP;    // eyes: -, -, lidFade (morph-blended), capsule radius (units)
 uniform vec4  uEyeA;    // eye box (radians): half width, half visible height, 1/hw, 1/hh
 uniform vec4  uShapeC;  // eye (radians): centre offset (happy squint), blink lid line (rel. to centre), lid corner k, rest lon (±)
-uniform vec4  uAsym;    // 3/4 asymmetry: width scale ±(1 + side·x), height offset (side·y); expression-lid height z, -
+uniform vec4  uAsym;    // 3/4 asymmetry: width scale ±(1 + side·x), height offset (side·y); expression-lid height z, height scale ±(1 + side·w)
 uniform vec4  uCutN;    // expression-lid line normal: left eye (xy), right eye (zw)
 uniform vec4  uLat;     // fixed lattice warp: 1/k of the bottom row inner, mid, outer; 1/(1.4·hw)
 uniform vec4  uToon;    // toon layer: rim alpha (0 = off → skipped), pupil alpha (0 = off), -, -
@@ -97,7 +97,8 @@ float smax(float a, float c, float k){ float h = max(k - abs(a - c), 0.0) / k; r
 // rp = rim transform applied after the shared lattice warp (outward, up, scale; vec3(0,0,1) = the white itself).
 float eyeSDF(vec2 p, vec2 b, float side, vec3 rp){
   float sx = 1.0 + side * uAsym.x;
-  p.y += side * uAsym.y; p.x /= sx;
+  float sy = max(0.35, 1.0 + side * uAsym.w);
+  p.y += side * uAsym.y; p.x /= sx; p.y /= sy;
   p.y -= uShapeC.x;
   vec2 ib = uEyeA.zw;
   float f = clamp(-side * p.x * uLat.w, -1.0, 1.0);
@@ -112,7 +113,7 @@ float eyeSDF(vec2 p, vec2 b, float side, vec3 rp){
   vec2 pl = p - ro;                                    // lid lines ride with the rim (lash line)
   vec2 cn = side < 0.0 ? uCutN.xy : uCutN.zw;
   d = max(d, dot(pl, cn) - uAsym.z);                   // expression lid (debug sliders; parked far above = none)
-  return smax(d, pl.y - uShapeC.y, uShapeC.z) * min(sx, 1.0);
+  return smax(d, pl.y - uShapeC.y, uShapeC.z) * min(min(sx, sy), 1.0);
 }
 
 // pupil coverage (unclipped), computed by the centre tap (always called first) and reused by the two side
@@ -159,14 +160,15 @@ vec3 eyeTap(vec3 col, float lon, float lat, float Z, float rimA, float pc){
   // side taps reuse its coverage.
   if (uToon.y > 0.0 && pc > 0.5) {
     float psx = 1.0 + side * uAsym.x;
+    float psy = max(0.35, 1.0 + side * uAsym.w);
     vec2 pc2 = side < 0.0 ? uPupilC.xy : uPupilC.zw;
-    vec2 pq = uPupilM * vec2(u / psx + side * uPupil.x - uPupil.y - pc2.x, v + side * uAsym.y - uPupil.z - pc2.y);
+    vec2 pq = uPupilM * vec2(u / psx + side * uPupil.x - uPupil.y - pc2.x, (v + side * uAsym.y - uPupil.z - pc2.y) / psy);
     float nw = max(uEmo.z, 0.3);                               // < 1 narrows the pupil (angry)
     pq.x /= nw;
     vec2 p0 = pq * uPupilA.zw, p1 = p0 * uPupilA.zw;           // gradient-normalised ellipse
     float pk = length(p0);
     float dp = pk * (pk - 1.0) * inversesqrt(max(dot(p1, p1), 1e-8));
-    dp *= min(psx, 1.0) * uPupil.w * nw * RR * (0.5 * Z + 0.5);
+    dp *= min(min(psx, psy), 1.0) * uPupil.w * nw * RR * (0.5 * Z + 0.5);
     vec3 pcol = uToonCol;
     if (uScr.x > 0.0) {
       // the screen: pupil ∩ eye outline. uScr.y ≤ 0 pushes the clip past the white so the sclera is gone;
