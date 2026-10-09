@@ -1307,7 +1307,7 @@ bar.appendChild(thinkBtn); TH._btn=thinkBtn;
    Happy/love: ZOOM → burst of 3 rapid yes-nods → pause → burst of 3 more → settle → repeat.
    Sad: long holds + rare slow weighted head-dip (not yes-nods) + heavy blinks + down gaze.
    Angry: sharp gaze-dart bursts + occasional forward size-lean + short hard blinks.
-   Surprised: long freeze + rare gasp size-pop + recover (surprise is short-lived; idle = stunned hold).
+   Surprised: freeze → head yaw turn (pupils lag) → side-eye glance opposite → hold → home; rare gasp pop. Wide lids held.
    Sleepy: sticky slow blinks + rare head-drop with doze-catch rebound.
    Think still owns the face while it runs: emoGate snaps shut for thinking / working / done and eases
    back to whatever was held. Optional ?love=m2|m3|m4|3 debug glow strength only. */
@@ -1336,7 +1336,7 @@ const SQ={until:0,phase:'rest'};                                   // lighter sq
 const HAP={phase:'zoom',until:0,count:0,burst:0,amp:.16,zoomTo:1.10,restJoy:1.02};
 /* ACT: directed idle for sad / angry / surprised / sleepy. Springs-only targets via LOOP.x/y + joy. */
 const ACT={kind:'',phase:'hold',until:0,count:0,amp:0,side:1,leanTo:1,baseY:0};
-const LOOP={armed:false,kind:'neutral',phase:'home',until:0,x:0,y:0};
+const LOOP={armed:false,kind:'neutral',phase:'home',until:0,x:0,y:0,px:null,py:null};
 const emoIsHappyFam=()=>EM.name==='happy'||EM.name==='love';
 const emoLooped=()=>EM.name==='happy'||EM.name==='love'||EM.name==='sad'||EM.name==='angry'||EM.name==='surprised'||EM.name==='sleepy';
 function pbPlan(){
@@ -1388,7 +1388,8 @@ function actStart(){
   } else if(EM.name==='angry'){
     ACT.phase='hold'; ACT.until=CK.simT+900+Math.random()*700;
   } else if(EM.name==='surprised'){
-    ACT.phase='freeze'; ACT.until=CK.simT+2400+Math.random()*1400;
+    ACT.phase='freeze'; ACT.until=CK.simT+900+Math.random()*500;       // short stunned hold, then turn
+    LOOP.px=null; LOOP.py=null;
   } else { // sleepy
     ACT.phase='hold'; ACT.until=CK.simT+2800+Math.random()*2000;
   }
@@ -1396,6 +1397,7 @@ function actStart(){
 function loopArm(){
   const e=EMOS[EM.name]||EMOS.neutral;
   LOOP.armed=true; LOOP.kind=EM.name; LOOP.phase='home'; LOOP.x=e.gx||0; LOOP.y=e.gy||0;
+  LOOP.px=null; LOOP.py=null;
   LOOP.until=CK.simT+1800+Math.random()*1600;
   nextBlink=CK.simT+700+Math.random()*900;
   pbPlan(); HLB.seg=0; HLB.t0=CK.simT; HLB.from=1; HLB.to=1+HLB.amp; HLB.dur=HLB.tIn; snap(pupBreath,1);
@@ -1406,6 +1408,7 @@ function loopArm(){
 }
 function loopDisarm(){
   LOOP.armed=false; LOOP.kind='neutral'; LOOP.phase='home';
+  LOOP.px=null; LOOP.py=null;
   pupBreath.t=1; joy.t=1; joy.k=.08; joy.d=.70; wPulse.t=0; SQ.phase='rest';
   HAP.phase='settle'; HAP.count=0; HAP.burst=0;
   ACT.phase='hold'; ACT.kind=''; ACT.count=0;
@@ -1561,25 +1564,65 @@ function angryLoopTick(){
   step(joy);
 }
 function surprisedLoopTick(){
+  /* Film-clear surprise idle: freeze → HEAD TURN (yaw) with pupils LAG at rest →
+     SIDE-EYE glance opposite the turn → hold → home. Rare gasp pop between cycles.
+     Wide surprised lids stay via EMOS.surprised (lift/size); this only drives pose. */
   const e=emoSpec(), rx=e.gx||0, ry=e.gy||0;
   step(wPulse);
-  LOOP.x=rx; LOOP.y=ry;                                            // freeze gaze — stunned
   if(CK.simT>=ACT.until){
     if(ACT.phase==='freeze'){
-      ACT.phase='gasp';
-      ACT.leanTo=1.06+.04*Math.random();
-      joy.k=.18; joy.d=.50; joy.t=ACT.leanTo;
-      if(!still&&!forced) size.v+=.14;
-      // one pupil punch
-      pupBreath.t=1+(HLB.amp+.04);
-      ACT.until=CK.simT+220+Math.random()*70;
+      // Head leads: yaw to one side; pupils lag at rest (still looking “at camera”)
+      ACT.phase='turn';
+      ACT.side=Math.random()<.5?-1:1;
+      ACT.amp=.30+.08*Math.random();                                 // clear readable yaw
+      LOOP.x=rx+ACT.side*ACT.amp; LOOP.y=ry;
+      LOOP.px=rx; LOOP.py=ry;                                        // lag: eyes stay home
+      joy.t=1;
+      ACT.until=CK.simT+340+Math.random()*100;                       // ~340–440 ms head lead
+    } else if(ACT.phase==='turn'){
+      // Then eyes look sideways — opposite the head turn (classic side-eye)
+      ACT.phase='side';
+      const pupAmp=.22+.08*Math.random();
+      LOOP.x=rx+ACT.side*ACT.amp; LOOP.y=ry;                         // head holds the turn
+      LOOP.px=rx-ACT.side*pupAmp; LOOP.py=ry+(.02*Math.random()-.01);
+      ACT.until=CK.simT+420+Math.random()*160;                       // dart + settle ~420–580 ms
+    } else if(ACT.phase==='side'){
+      ACT.phase='hold';
+      // keep head turned + opposite pupils
+      ACT.until=CK.simT+700+Math.random()*400;                       // hold the side-eye
+    } else if(ACT.phase==='hold'){
+      ACT.phase='home';
+      LOOP.x=rx; LOOP.y=ry; LOOP.px=rx; LOOP.py=ry;
+      ACT.until=CK.simT+480+Math.random()*220;                       // ease home
+    } else if(ACT.phase==='home'){
+      LOOP.px=null; LOOP.py=null;
+      if(Math.random()<.32){
+        // rare gasp pop (keeps the stunned surprise beat)
+        ACT.phase='gasp';
+        ACT.leanTo=1.06+.04*Math.random();
+        joy.k=.18; joy.d=.50; joy.t=ACT.leanTo;
+        if(!still&&!forced) size.v+=.14;
+        pupBreath.t=1+(HLB.amp+.04);
+        LOOP.x=rx; LOOP.y=ry;
+        ACT.until=CK.simT+220+Math.random()*70;
+      } else {
+        ACT.phase='freeze'; joy.t=1; joy.k=.08; joy.d=.72;
+        LOOP.x=rx; LOOP.y=ry;
+        ACT.until=CK.simT+1600+Math.random()*1200;                   // stunned pause
+      }
     } else if(ACT.phase==='gasp'){
       ACT.phase='recover'; joy.k=.08; joy.d=.72; joy.t=1;
+      LOOP.x=rx; LOOP.y=ry; LOOP.px=null; LOOP.py=null;
       ACT.until=CK.simT+500+Math.random()*220;
-    } else {
+    } else { // recover → freeze
       ACT.phase='freeze'; joy.t=1;
-      ACT.until=CK.simT+3000+Math.random()*1800;                   // long stunned hold
+      LOOP.x=rx; LOOP.y=ry; LOOP.px=null; LOOP.py=null;
+      ACT.until=CK.simT+1400+Math.random()*1000;
     }
+  }
+  // hold targets steady within a phase (no drift)
+  if(ACT.phase==='freeze'||ACT.phase==='gasp'||ACT.phase==='recover'){
+    if(ACT.phase==='freeze'){ LOOP.x=rx; LOOP.y=ry; }
   }
   step(joy);
 }
@@ -1693,7 +1736,9 @@ function emoTick(){
       } else if(LOOP.armed&&EM.name==='angry'){
         yaw.k=.42; yaw.d=.45; pitch.k=.38; pitch.d=.50;            // sharp darts / lean twitch
       } else if(LOOP.armed&&EM.name==='surprised'){
-        yaw.k=.12; yaw.d=.72; pitch.k=.12; pitch.d=.72;
+        const surTurn=ACT.phase==='turn'||ACT.phase==='side'||ACT.phase==='hold';
+        yaw.k=surTurn?.30:.12; yaw.d=surTurn?.50:.72;                 // clear head turn
+        pitch.k=.12; pitch.d=.72;
       } else if(LOOP.armed&&EM.name==='sad'){
         yaw.k=.07; yaw.d=.80; pitch.k=.055; pitch.d=.84;           // heavy slow dip
       } else if(LOOP.armed&&EM.name==='sleepy'){
@@ -1781,7 +1826,17 @@ function tick(){            // one fixed 60 Hz step of the whole motion model
   // blink: the lid comes down from the top; happy: a soft squint (face.js eyeShapeV)
   lid.t=(CK.simT<blinkUntil)?0:1-.5*Math.max(0,Math.min(1,happy.x));
   step(yaw);step(pitch);step(size);step(lid);
-  if(!forced){ pupX.t=yaw.t; pupY.t=pitch.t; step(pupX); step(pupY); }
+  if(!forced){
+    // LOOP.px/py override pupil targets (surprised side-eye: head≠eyes). Else pupils track gaze target.
+    pupX.t=(LOOP.armed&&LOOP.px!=null)?LOOP.px:yaw.t;
+    pupY.t=(LOOP.armed&&LOOP.py!=null)?LOOP.py:pitch.t;
+    if(LOOP.armed&&EM.name==='surprised'&&(ACT.phase==='side'||ACT.phase==='turn')){
+      pupX.k=.42; pupX.d=.48; pupY.k=.42; pupY.d=.48;                 // snappy side-eye dart
+    } else {
+      pupX.k=.2; pupX.d=.6; pupY.k=.2; pupY.d=.6;
+    }
+    step(pupX); step(pupY);
+  }
   pupilLife();
   blinkLife();
   // glass follows the pose from LAG ms ago on a heavier, softer spring (eyes lead)
@@ -1792,9 +1847,9 @@ function tick(){            // one fixed 60 Hz step of the whole motion model
   const freeFace=TH.state!=='thinking'&&TH.state!=='working';
   const hapNod=LOOP.armed&&emoIsHappyFam()&&freeFace;
   const angSnap=LOOP.armed&&EM.name==='angry'&&freeFace&&(ACT.phase==='dart'||ACT.phase==='dartHome'||ACT.phase==='lean');
-  const surSnap=LOOP.armed&&EM.name==='surprised'&&freeFace&&(ACT.phase==='gasp'||ACT.phase==='recover');
+  const surSnap=LOOP.armed&&EM.name==='surprised'&&freeFace&&(ACT.phase==='gasp'||ACT.phase==='recover'||ACT.phase==='turn'||ACT.phase==='side'||ACT.phase==='hold');
   const heavy=LOOP.armed&&(EM.name==='sad'||EM.name==='sleepy')&&freeFace;
-  gYaw.k=angSnap?.32:heavy?.10:T.gk; gYaw.d=angSnap?.52:heavy?.82:T.gd;
+  gYaw.k=angSnap?.32:surSnap?.28:heavy?.10:T.gk; gYaw.d=angSnap?.52:surSnap?.56:heavy?.82:T.gd;
   gPitch.k=hapNod?.28:angSnap?.30:surSnap?.26:heavy?.09:T.gk;
   gPitch.d=hapNod?.58:angSnap?.54:surSnap?.60:heavy?.84:T.gd;
   if(!forced){
@@ -2077,7 +2132,7 @@ const trace=steps=>{stop(); const r=[]; driveSteps(steps,r); return JSON.stringi
 window.__astrid={
   state:s=>{ if(s!=null) thinkState(s); return TH.state; },
   emotion:name=>{ if(name!=null) setEmotion(name); return EM.name; },
-  loop:()=>({emo:EM.name,armed:LOOP.armed,kind:LOOP.kind,phase:LOOP.phase,gaze:[+LOOP.x.toFixed(3),+LOOP.y.toFixed(3)],breath:+pupBreath.x.toFixed(4),amp:HLB.amp,joy:+joy.x.toFixed(4),zoomTo:+HAP.zoomTo.toFixed(3),pulse:+wPulse.x.toFixed(3),sq:SQ.phase,hap:HAP.phase,burst:HAP.burst,count:HAP.count,nodAmp:+HAP.amp.toFixed(3),nextHap:Math.round(HAP.until-CK.simT),act:ACT.phase,actCount:ACT.count,actAmp:+ACT.amp.toFixed(3),nextAct:Math.round(ACT.until-CK.simT),pitch:+pitch.x.toFixed(4),gPitch:+gPitch.x.toFixed(4),size:+size.x.toFixed(4),nextBlink:Math.round(nextBlink-CK.simT),nextPulse:Math.round(SQ.until-CK.simT)}),
+  loop:()=>({emo:EM.name,armed:LOOP.armed,kind:LOOP.kind,phase:LOOP.phase,gaze:[+LOOP.x.toFixed(3),+LOOP.y.toFixed(3)],pup:[LOOP.px==null?null:+LOOP.px.toFixed(3),LOOP.py==null?null:+LOOP.py.toFixed(3)],breath:+pupBreath.x.toFixed(4),amp:HLB.amp,joy:+joy.x.toFixed(4),zoomTo:+HAP.zoomTo.toFixed(3),pulse:+wPulse.x.toFixed(3),sq:SQ.phase,hap:HAP.phase,burst:HAP.burst,count:HAP.count,nodAmp:+HAP.amp.toFixed(3),nextHap:Math.round(HAP.until-CK.simT),act:ACT.phase,actCount:ACT.count,actAmp:+ACT.amp.toFixed(3),actSide:ACT.side,nextAct:Math.round(ACT.until-CK.simT),yaw:+yaw.x.toFixed(4),pitch:+pitch.x.toFixed(4),gYaw:+gYaw.x.toFixed(4),gPitch:+gPitch.x.toFixed(4),pupX:+pupX.x.toFixed(4),pupY:+pupY.x.toFixed(4),size:+size.x.toFixed(4),nextBlink:Math.round(nextBlink-CK.simT),nextPulse:Math.round(SQ.until-CK.simT)}),
   think:t=>{ const L=Array.isArray(t)?t:String(t).split('\n'); TH.queue.push(...L.filter(x=>x!=null)); if(TH.state!=='working') thinkState('working'); return TH.queue.length; },
   thinkStyle:s=>{ if(THINK_STYLES[s]){ TH.style=s; TH.dirty=true; } return TH.style; },
   thinkEyes:e=>{ TH.eyes=e==='same'?'same':'split'; TH.dirty=true; return TH.eyes; },
