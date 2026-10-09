@@ -1311,7 +1311,7 @@ bar.appendChild(thinkBtn); TH._btn=thinkBtn;
    Angry: sharp gaze-dart bursts + occasional forward size-lean + short hard blinks.
    Surprised: freeze → head yaw turn (pupils lag) → side-eye glance opposite → hold → home; rare gasp pop. Wide lids held.
    Sleepy: FIGHTING sleep pass 4 — same lose→stick→catch→wide→sag; slow sticky blink clamped to SLEEPY_LID_FLOOR (never full close / never eyes disappear).
-   Concerned: soft care (partial sad+angry lids, not a glare); slow blinks, tiny L/R gaze checks, rare soft roll tilt. Size×height-exp: ?concerned=a|b|c.
+   Concerned: C1 taller open whites from C (size 1.20, height 1.28), soft lids; slow blinks, tiny L/R gaze checks, rare soft roll tilt. Debug: ?concerned=a|b|c|c1..c6.
    Listening: attentive sit — lids a touch wider, gaze locked to user, very still; rare micro nod + soft blink.
    Confused: C6d soft lids (sad+tired, almost no angry) + mild one-eye height asym; rare double-take gaze + soft roll tilt, then recover. Debug size×height: ?confused=a|b|c|c1..c6|c6a..c6f.
    Think still owns the face while it runs: emoGate snaps shut for thinking / working / done and eases
@@ -1844,9 +1844,9 @@ const EMOS={
   sleepy:    {sad:0, angry:0, tired:1, arc:0, lift:0, pup:1.24, narrow:1, warm:0, smile:0, gx:0, gy:.18, size:1, asym:0},
   // love = happy face + M1 glow decoration only (rim + mauve pool). Same springs targets as happy.
   love:      {sad:0, angry:0, tired:0, arc:1, lift:1, pup:1, narrow:1, warm:.12, smile:1, gx:0, gy:-.05, size:1.04, asym:0},
-  // concerned = soft care (partial sad+angry lids, not full glare); pupils a bit smaller; gaze down-forward; soft warm-neutral.
-  // Default kept until size×height-exp pick. Debug: ?concerned=a|b|c|c1..c6 (size × height / soft lids).
-  concerned:{sad:.22, angry:.38, tired:.08, arc:0, lift:0, pup:.84, narrow:.72, warm:.05, smile:.10, gx:0, gy:.14, size:1, height:1, asym:0, hAsym:0},
+  // concerned = soft care (C1 shipped): taller open whites from C (size 1.20, height 1.28), soft lids, tiny pupils.
+  // Debug still: ?concerned=a|b|c|c1..c6 (size × height / soft lids).
+  concerned:{sad:.30, angry:.06, tired:.14, arc:0, lift:.14, pup:.60, narrow:1.0, warm:.08, smile:.12, gx:0, gy:.10, size:1.20, height:1.28, asym:0, hAsym:0},
   // listening = attentive sit: lids a touch wider (lift), gaze locked to user, still.
   listening: {sad:0, angry:0, tired:0, arc:0, lift:.22, pup:.92, narrow:1, warm:0, smile:0, gx:0, gy:-.06, size:1.03, asym:0},
   // confused = soft huh (C6d shipped): soft lids (more sad+tired, almost no angry), mild one-eye height asym, size+height bump.
@@ -1855,7 +1855,7 @@ const EMOS={
 };
 /* Eye SIZE × HEIGHT experiment. size = overall scale; height = vertical aperture.
    Angry stays short+small ref (size .98, narrow .48, height 1 with hard lids). Soft lids on variants.
-   Confused default = C6d (shipped). Pick with ?concerned=a|b|c|c1..c6 and/or ?confused=a|b|c|c1..c6|c6a..c6f. */
+   Concerned default = C1 (shipped). Confused default = C6d (shipped). Pick with ?concerned=a|b|c|c1..c6 and/or ?confused=a|b|c|c1..c6|c6a..c6f. */
 const CONCERNED_SIZE={
   // A: modest bigger + shorter aperture (soft care, not glare)
   a:{sad:.32, angry:.14, tired:.12, arc:0, lift:.04, pup:.76, narrow:.94, warm:.06, smile:.12, gx:0, gy:.12, size:1.08, height:.88, asym:0, hAsym:0},
@@ -1863,7 +1863,7 @@ const CONCERNED_SIZE={
   b:{sad:.34, angry:.12, tired:.12, arc:0, lift:.08, pup:.68, narrow:.96, warm:.08, smile:.14, gx:0, gy:.12, size:1.14, height:1.06, asym:0, hAsym:0},
   // C: largest + tallest open worry (soft lids, tiny pupils) — base for C1–C6
   c:{sad:.30, angry:.08, tired:.14, arc:0, lift:.12, pup:.62, narrow:1.0, warm:.08, smile:.12, gx:0, gy:.10, size:1.20, height:1.16, asym:0, hAsym:0},
-  // C1: taller aperture (more open whites) from C
+  // C1: taller aperture (more open whites) from C — SHIPPED as EMOS.concerned default
   c1:{sad:.30, angry:.06, tired:.14, arc:0, lift:.14, pup:.60, narrow:1.0, warm:.08, smile:.12, gx:0, gy:.10, size:1.20, height:1.28, asym:0, hAsym:0},
   // C2: shorter aperture (still soft, less tall)
   c2:{sad:.32, angry:.08, tired:.16, arc:0, lift:.10, pup:.64, narrow:1.0, warm:.08, smile:.12, gx:0, gy:.12, size:1.20, height:1.04, asym:0, hAsym:0},
