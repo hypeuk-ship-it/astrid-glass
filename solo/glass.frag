@@ -70,7 +70,8 @@ uniform vec4  uScr;     // on (0/1), inset margin (rad), text brightness 0…1, 
 uniform vec4  uScrM;    // text frame: top v (rad, rel. to eye centre), S (tex units per rad), scanlines per screen, scanline depth
 uniform vec4  uScrK;    // vignette width (rad), bg lift, bg mix (pupil ink → screen bg), -
 uniform vec3  uScrBg;   // screen background (dark)
-uniform vec4  uEmo;     // heart 0..1, warm 0..1, pupil width scale (1 = round), smile glow 0..1
+uniform vec4  uEmo;     // heart 0..1 (kept at 0: pupils stay the tall ovals), warm 0..1, pupil width scale, smile glow
+uniform vec4  uLove;    // love: z = pool+rim strength (M1 default 1.15; >1 stronger). x/y/w retired (stay 0)
 
 const vec2  C  = vec2(120.0, 120.0);
 const float R  = 118.0;   // orb
@@ -114,14 +115,6 @@ float eyeSDF(vec2 p, vec2 b, float side, vec3 rp){
   return smax(d, pl.y - uShapeC.y, uShapeC.z) * min(sx, 1.0);
 }
 
-// filled heart (iq), point down, roughly x ±0.6, y 0..1.1. Used for the love pupil.
-float sdHeart(vec2 p){
-  p.x = abs(p.x);
-  if (p.y + p.x > 1.0) return length(p - vec2(0.25, 0.75)) - 0.353553;
-  return sqrt(min(dot(p - vec2(0.0, 1.0), p - vec2(0.0, 1.0)),
-                  dot(p - vec2(1.0, 0.0), p - vec2(1.0, 0.0)))) * sign(p.x - p.y);
-}
-
 // pupil coverage (unclipped), computed by the centre tap (always called first) and reused by the two side
 // taps: the pupil is painted INTO each tap's white colour, so the white's own edge clips it (one AA edge, no
 // seam against the rim behind, no light line) and the pupil itself never gets an RGB split. gFillMax = the union
@@ -143,6 +136,12 @@ vec3 eyeTap(vec3 col, float lon, float lat, float Z, float rimA, float pc){
   float gv = vis * (1.0 - abs(rimA));                              // the rim stays crisp (no glow over it)
   vec3 glowC = mix(uGlow, vec3(1.0, 0.58, 0.74), clamp(uEmo.y, 0.0, 1.0));
   col = tint(col, glowC, 0.26 * (1.0 + 0.95 * uEmo.w + 0.4 * uEmo.y) * g2(dsp, uEyeK.y) * gv);
+  // glow rim just outside the white. z=1 is the faint take; z>1 thickens + brightens (still muted).
+  float gz = max(uLove.z, 0.0);
+  float gBoost = max(gz - 1.0, 0.0);
+  float roseOuter = 7.5 + 5.5 * gBoost;
+  float roseRing = smoothstep(-0.4, 2.2, ds) * (1.0 - smoothstep(2.2, roseOuter, ds));
+  col = mix(col, vec3(0.78, 0.48, 0.52), min(0.62 * gz, 0.92) * roseRing * vis);
   col = mix(col, uAura.rgb, uAura.a * g2(dsp - 1.5, uEyeK.z) * gv);    // pool-coloured aura
   // pebble fill: bright top-right → eye colour → faint shade lower-left, plus a soft inner edge shade
   float uu = clamp(u * uEyeK.w * 0.5 + 0.5, 0.0, 1.0);
@@ -152,7 +151,10 @@ vec3 eyeTap(vec3 col, float lon, float lat, float Z, float rimA, float pc){
   float rimShade = smoothstep(uEyeK2.y, 0.0, ds) * smoothstep(0.3, 0.9, t);
   ec = mix(ec, uEyeLo, 0.4 * rimShade);
   ec = mix(ec, vec3(1.0), 0.22 * uEmo.w);                              // happy: brighter white
-  ec = mix(ec, vec3(1.0, 0.80, 0.86), 0.38 * uEmo.y);                  // love: warm white
+  ec = mix(ec, vec3(1.0, 0.80, 0.86), 0.38 * uEmo.y);                  // happy's small warm (live)
+  // dusty rose only in the lower white. Stronger when paired with glow (B/D).
+  float blushK = 0.34 + 0.28 * step(0.5, uLove.z);
+  ec = mix(ec, vec3(0.80, 0.58, 0.62), uLove.x * vv * blushK);
   // pupil: upright oval; soft containment (CPU) keeps it inside the white; lids cover it. Centre tap evaluates,
   // side taps reuse its coverage.
   if (uToon.y > 0.0 && pc > 0.5) {
@@ -182,16 +184,9 @@ vec3 eyeTap(vec3 col, float lon, float lat, float Z, float rimA, float pc){
       gScrC = pcol;
     }
     float cover = 1.0 - smoothstep(-w, w, dp);
-    if (uScr.x < 0.5 && uEmo.x > 0.001) {
-      vec2 hn = pq * uPupilA.zw;
-      vec2 hp2 = vec2(hn.x / 1.35, hn.y / 1.35 + 0.52);       // heart fills the pupil, point down
-      float dh = sdHeart(hp2) * 1.35;
-      dh *= min(uPupilA.x, uPupilA.y) * min(psx, 1.0) * uPupil.w * RR * (0.5 * Z + 0.5);
-      cover = mix(cover, 1.0 - smoothstep(-w, w, dh), uEmo.x);
-    }
     gCovP = uToon.y * cover;
   }
-  vec3 pcol2 = uScr.x > 0.0 ? gScrC : mix(uToonCol, vec3(0.93, 0.16, 0.40), uEmo.x);
+  vec3 pcol2 = uScr.x > 0.0 ? gScrC : uToonCol;
   ec = mix(ec, pcol2, gCovP);
   float fill = 1.0 - smoothstep(-w, w, ds);
   gFillMax = max(gFillMax, fill * vis);
@@ -261,8 +256,24 @@ vec3 eyes(vec3 col, vec2 p, vec2 off){
     // (white fill ~ 0) is untouched. gCovP still limits it to the pupil, so the shrink-back reads.
     cov = gCovP * smoothstep(0.0, 0.02, gFillMax);
   }
-  vec3 ink = uScr.x > 0.0 ? gScrC : mix(uToonCol, vec3(0.93, 0.16, 0.40), uEmo.x);
+  vec3 ink = uScr.x > 0.0 ? gScrC : uToonCol;
   c = mix(c, ink, cov);
+  // take 2: three short dark strokes at the outer corner. No motion. They start on the lid and step just past it.
+  if (uLove.y > 0.001) {
+    float side = lon < 0.0 ? -1.0 : 1.0;
+    float u = lon - uShapeC.w * side;
+    float v = lat - uEyeK2.z + uEyeK2.w * u * u;
+    float hw = uEyeA.x, hh = uEyeA.y;
+    vec2 o = vec2(side * hw * 0.52, hh * 0.78);
+    float sg = side;
+    vec2 qe = vec2(u, v);
+    float d2 = seg2(qe, vec4(o, o + vec2(sg * 0.016, 0.055)));
+    d2 = min(d2, seg2(qe, vec4(o + vec2(sg * 0.018, 0.006), o + vec2(sg * 0.050, 0.058))));
+    d2 = min(d2, seg2(qe, vec4(o + vec2(sg * 0.034, -0.004), o + vec2(sg * 0.078, 0.028))));
+    float th = 0.010;
+    float a = (1.0 - smoothstep(th * th * 0.25, th * th, d2)) * uEyeP.z * smoothstep(0.02, 0.08, Z) * uLove.y;
+    c = mix(c, vec3(0.11, 0.08, 0.09), a);
+  }
   return c;
 }
 
@@ -308,7 +319,25 @@ void main(){
     float lift = smoothstep(0.55, 0.95, low) * m;
     pool = mix(pool, uLiftCol, 0.55 * lift * pa * (1.0 - uMode.y*0.5));
     pool = mix(pool, vec3(1.0, 0.93, 0.88), 0.28 * uEmo.w * pa);          // happy: a little warmer glass
-    pool = mix(pool, vec3(1.0, 0.48, 0.66), 0.26 * uEmo.y * pa);          // love: rose in the pool
+    pool = mix(pool, vec3(1.0, 0.48, 0.66), 0.26 * uEmo.y * pa);          // happy's small warm, same as the live shader
+    // love glow: dusty rose in the pool. z=1 faint; z>1 warmer + a touch stronger.
+    float gz = max(uLove.z, 0.0);
+    float gBoost = max(gz - 1.0, 0.0);
+    vec3 rosePool = mix(vec3(0.72, 0.46, 0.50), vec3(0.76, 0.44, 0.48), clamp(gBoost, 0.0, 1.0));
+    pool = mix(pool, rosePool, min(0.34 * gz + 0.10 * gBoost, 0.58) * pa);
+    // take C: a small dusty-rose heart in the lower pool (under the eyes, outside the whites).
+    if (uLove.w > 0.001) {
+      // IQ heart SDF; AstridFace y grows down, so flip y so the point aims into the pool.
+      vec2 hp = (pl - vec2(C.x, C.y + 28.0)) / 12.0;
+      hp.x = abs(hp.x);
+      hp.y = -hp.y;
+      float dH = (hp.y + hp.x > 1.0)
+        ? length(hp - vec2(0.25, 0.75)) - 0.35355
+        : min(length(hp - vec2(0.00, 1.00)), length(hp - vec2(0.50, 0.00))) * sign(hp.x - hp.y);
+      float ha = (1.0 - smoothstep(-0.04, 0.10, dH)) * uLove.w * m * body;
+      float haSoft = (1.0 - smoothstep(-0.15, 0.45, dH)) * uLove.w * m * body * 0.30 * pa;
+      pool = mix(pool, vec3(0.76, 0.40, 0.46), clamp(ha * 0.98 + haSoft, 0.0, 1.0));
+    }
     col = mix(col, pool, m * body);
 
     // ---- haze: white veil, heavier toward the top (fixed) ----

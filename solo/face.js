@@ -32,21 +32,23 @@
   const len=(x,y)=>Math.sqrt(x*x+y*y), clamp=(x,a,b)=>Math.min(b,Math.max(a,x));
   /* expression lids (debug sliders): a straight lid line per eye, height ×hh above the eye centre and angle
      (+ = the inner side higher), slid in from above (off) by the summed weight. */
-  const LIDX=Object.freeze({off:1.35, sad:[.45,.45], angry:[.40,-.45], tired:[.05,0], k:.08});
+  const LIDX=Object.freeze({off:1.35, sad:[.45,.45], angry:[.40,-.45], tired:[.05,0], love:[.90,-.16], k:.08, loveK:.20});
   /* 3/4 asymmetry + lid line: o.asx = ±width scale per side (right 1+asx, left 1−asx), o.asy = ±height offset
      (left up, right down), o.cut = lid line height (parked 9·hh = none), o.cutk = its corner,
      (o.nLx, o.nLy) / (o.nRx, o.nRy) = the lid line's normal for the left / right eye. A = asymmetry (1 = the tutorial). */
-  function cutFrame(o,A,ls,la,lt){
+  function cutFrame(o,A,ls,la,lt,lf){
     const a=clamp(A||0,0,1.5); o.asx=EYE.asw/2*a; o.asy=EYE.ahy*o.hh*a;
     let pR=EYE.atilt*a, pL=EYE.atilt*a;                               // top line angle per eye (+ = rising to the right)
     o.cut=9*o.hh; o.cutk=1e-3;
-    const ws=clamp(ls||0,0,1), wa=clamp(la||0,0,1), wt=clamp(lt||0,0,1), sum=ws+wa+wt;
+    const ws=clamp(ls||0,0,1), wa=clamp(la||0,0,1), wt=clamp(lt||0,0,1), wf=clamp(lf||0,0,1), sum=ws+wa+wt+wf;
     if(sum>0){
       const W=Math.min(1,sum), X=LIDX;
-      const hT=(ws*X.sad[0]+wa*X.angry[0]+wt*X.tired[0])/sum, aT=(ws*X.sad[1]+wa*X.angry[1]+wt*X.tired[1])/sum;
+      const hT=(ws*X.sad[0]+wa*X.angry[0]+wt*X.tired[0]+wf*X.love[0])/sum, aT=(ws*X.sad[1]+wa*X.angry[1]+wt*X.tired[1]+wf*X.love[1])/sum;
       const h=X.off+(hT-X.off)*W, ang=aT*W;
       pL+=ang; pR-=ang;                                               // inner side up: left eye rises right, right eye rises left
-      o.cut=h*o.hh*Math.cos(ang); o.cutk=Math.max(o.cutk,X.k*o.hw*W);
+      o.cut=h*o.hh*Math.cos(ang);
+      const kk=(wf>.5&&ws+wa+wt<.01)?X.loveK:X.k;                    // love's lid is rounder, so it doesn't read as a slash
+      o.cutk=Math.max(o.cutk,kk*o.hw*W);
     }
     o.nLx=-Math.sin(pL); o.nLy=Math.cos(pL); o.nRx=-Math.sin(pR); o.nRy=Math.cos(pR);
     return o;
@@ -64,7 +66,7 @@
     const lb=clamp(l/Math.max(.2,1-.5*hp),0,1);                        // the lid with the squint factored out
     o.vtop=o.hh*(2.25*lb-1);                                           // lid line: 1.25·hh above (open) → bottom
     o.ck=Math.max(1e-3,EYE.ck*o.hw); o.fade=s<=0?0:clamp(lb*5,0,1);
-    return cutFrame(o,v[4],v[5],v[6],v[7]);
+    return cutFrame(o,v[4],v[5],v[6],v[7],v[8]);
   }
   // ellipse, semi-axes a, b (iq's gradient-normalised approximation: exact on the boundary)
   function sdEllipse(u,v,a,b){ const k0=len(u/a,v/b), k1=len(u/(a*a),v/(b*b)); return k1>1e-9?k0*(k0-1)/k1:-Math.min(a,b); }
