@@ -1308,7 +1308,7 @@ bar.appendChild(thinkBtn); TH._btn=thinkBtn;
    Sad: long holds + rare slow weighted head-dip (not yes-nods) + heavy blinks + down gaze.
    Angry: sharp gaze-dart bursts + occasional forward size-lean + short hard blinks.
    Surprised: freeze → head yaw turn (pupils lag) → side-eye glance opposite → hold → home; rare gasp pop. Wide lids held.
-   Sleepy: FIGHTING sleep pass 3 — lose→stick→catch→wide→sag blends (soft springs, longer overlaps); slow sticky blink; no hard kicks.
+   Sleepy: FIGHTING sleep pass 4 — same lose→stick→catch→wide→sag; slow sticky blink clamped to SLEEPY_LID_FLOOR (never full close / never eyes disappear).
    Think still owns the face while it runs: emoGate snaps shut for thinking / working / done and eases
    back to whatever was held. Optional ?love=m2|m3|m4|3 debug glow strength only. */
 const EMO_K=.12, EMO_D=.72;
@@ -1339,6 +1339,8 @@ const ACT={kind:'',phase:'hold',until:0,count:0,amp:0,side:1,leanTo:1,baseY:0};
 const LOOP={armed:false,kind:'neutral',phase:'home',until:0,x:0,y:0,px:null,py:null};
 const emoIsHappyFam=()=>EM.name==='happy'||EM.name==='love';
 const emoLooped=()=>EM.name==='happy'||EM.name==='love'||EM.name==='sad'||EM.name==='angry'||EM.name==='surprised'||EM.name==='sleepy';
+/* sleepy blink/stick floor: lid never below this (fade needs ≥.2; slit of white/pupil always visible). */
+const SLEEPY_LID_FLOOR=.24;
 function pbPlan(){
   if(emoIsHappyFam()){
     HLB.tIn=700+Math.random()*300; HLB.tOut=800+Math.random()*300; HLB.tPause=300+Math.random()*220;
@@ -1628,9 +1630,9 @@ function surprisedLoopTick(){
   step(joy);
 }
 function sleepyLoopTick(){
-  /* Fighting sleep pass 3 (soften clank): lose → stick → catch → wide → sag.
-     Same story + slow sticky blink, but soft springs, milder catch, longer overlaps.
-     No hard lid/size velocity kicks; catch eases up instead of snapping. Springs only. */
+  /* Fighting sleep pass 4 (slit clamp): lose → stick → catch → wide → sag.
+     Slow sticky blink, but lid never below SLEEPY_LID_FLOOR — visible white/pupil slit always.
+     Soft springs, milder catch, longer overlaps. No hard lid/size kicks. Springs only. */
   const e=emoSpec(), rx=e.gx||0, ry=ACT.baseY;
   step(wPulse);
   if(CK.simT>=ACT.until){
@@ -1643,12 +1645,12 @@ function sleepyLoopTick(){
       if(CK.simT>=blinkUntil-400) blink(3200);                       // start early; very slow close+hold
       ACT.until=CK.simT+820+Math.random()*260;                       // longer lose ~820–1080 ms (overlap into stick)
     } else if(ACT.phase==='lose'){
-      // STICK: hang nearly asleep; keep lids shut (sleep almost wins)
+      // STICK: hang nearly asleep; lids at slit floor (sleep almost wins, eyes never vanish)
       ACT.phase='stick';
       LOOP.y=ry+ACT.amp;                                             // hold the dipped head
       joy.k=.035; joy.d=.90; joy.t=.96;
-      blinkUntil=Math.max(blinkUntil, CK.simT+1000);                 // lids stay nearly shut through stick
-      lid.t=0.04; lid.k=.006; lid.d=.95;
+      blinkUntil=Math.max(blinkUntil, CK.simT+1000);                 // lids stay at slit floor through stick
+      lid.t=SLEEPY_LID_FLOOR; lid.k=.006; lid.d=.95;              // nearly-shut slit — never seal
       ACT.until=CK.simT+560+Math.random()*280;                       // almost-asleep ~560–840 ms
     } else if(ACT.phase==='stick'){
       // CATCH: soft fight awake — head eases up past rest; lids struggle open (no hard kick)
@@ -1875,8 +1877,9 @@ function tick(){            // one fixed 60 Hz step of the whole motion model
   emoLoopTick();
   emoTick();
   // blink: the lid comes down from the top; happy: a soft squint (face.js eyeShapeV)
-  lid.t=(CK.simT<blinkUntil)||(EM.name==="sleepy"&&LOOP.armed&&(ACT.phase==="lose"||ACT.phase==="stick"))?(EM.name==="sleepy"?0.04:0):1-.5*Math.max(0,Math.min(1,happy.x));  // sleepy: hang nearly shut through lose/stick
+  lid.t=(CK.simT<blinkUntil)||(EM.name==="sleepy"&&LOOP.armed&&(ACT.phase==="lose"||ACT.phase==="stick"))?(EM.name==="sleepy"?SLEEPY_LID_FLOOR:0):1-.5*Math.max(0,Math.min(1,happy.x));  // sleepy: hang at slit floor (never full close)
   step(yaw);step(pitch);step(size);step(lid);
+  if(EM.name==='sleepy'&&lid.x<SLEEPY_LID_FLOOR){ lid.x=SLEEPY_LID_FLOOR; if(lid.v<0) lid.v=0; }  // clamp: eyes never fully disappear
   if(!forced){
     // LOOP.px/py override pupil targets (surprised side-eye: head≠eyes). Else pupils track gaze target.
     pupX.t=(LOOP.armed&&LOOP.px!=null)?LOOP.px:yaw.t;
