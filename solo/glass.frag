@@ -71,7 +71,7 @@ uniform vec4  uScrM;    // text frame: top v (rad, rel. to eye centre), S (tex u
 uniform vec4  uScrK;    // vignette width (rad), bg lift, bg mix (pupil ink → screen bg), -
 uniform vec3  uScrBg;   // screen background (dark)
 uniform vec4  uEmo;     // heart 0..1 (kept at 0: pupils stay the tall ovals), warm 0..1, pupil width scale, smile glow
-uniform vec4  uLove;    // love: z = pool+rim strength (M1 default 1.15; >1 stronger). x/y/w retired (stay 0)
+uniform vec4  uLove;    // love: z = M1 pool+rim (1.15) on happy face; x/y/w retired (stay 0)
 
 const vec2  C  = vec2(120.0, 120.0);
 const float R  = 118.0;   // orb

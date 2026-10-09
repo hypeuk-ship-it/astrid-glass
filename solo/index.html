@@ -122,7 +122,7 @@ uniform vec4  uScrM;    // text frame: top v (rad, rel. to eye centre), S (tex u
 uniform vec4  uScrK;    // vignette width (rad), bg lift, bg mix (pupil ink → screen bg), -
 uniform vec3  uScrBg;   // screen background (dark)
 uniform vec4  uEmo;     // heart 0..1 (kept at 0: pupils stay the tall ovals), warm 0..1, pupil width scale, smile glow
-uniform vec4  uLove;    // love: z = pool+rim strength (M1 default 1.15; >1 stronger). x/y/w retired (stay 0)
+uniform vec4  uLove;    // love: z = M1 pool+rim (1.15) on happy face; x/y/w retired (stay 0)
 
 const vec2  C  = vec2(120.0, 120.0);
 const float R  = 118.0;   // orb
@@ -447,9 +447,9 @@ void main(){
   gl_Position = vec4(aPos, 0.0, 1.0);
 }
 </script>
-<script src="coats.js?v=10091545"></script>
-<script src="springs.js?v=10091545"></script>
-<script src="face.js?v=10091545"></script>
+<script src="coats.js?v=10091600"></script>
+<script src="springs.js?v=10091600"></script>
+<script src="face.js?v=10091600"></script>
 <script>
 (function(){
 'use strict';
@@ -1301,10 +1301,11 @@ bar.appendChild(thinkBtn); TH._btn=thinkBtn;
 /* ================= emotions =================
    Six held faces on the Toon eye. Everything moves on springs (~300 ms, k .12 / d .72). No sine on the face.
    Lids reuse face.js (sad / angry / tired). Happy is the soft upward bow (the same arc as content,
-   not the content squint). No brow strokes. Love keeps the neutral tall oval pupil and neutral lids;
-   dusty-rose rim + mauve pool at M1 (uLove.z = 1.15). Optional ?love=m2|m3|m4|3 debug strength only.
-   Think still owns the face while it runs: emoGate snaps shut for thinking / working / done and eases
-   back to whatever was held. */
+   not the content squint). No brow strokes. Love = happy face exactly (same lids, pupils, size, gaze,
+   warm, smile) plus M1 dusty-rose rim + mauve pool (uLove.z = 1.15) as the only decoration.
+   Rest-life (blinks, pupil life) stays on — love is not a frozen pose. Optional ?love=m2|m3|m4|3
+   debug glow strength only. Think still owns the face while it runs: emoGate snaps shut for
+   thinking / working / done and eases back to whatever was held. */
 const EMO_K=.12, EMO_D=.72;
 const emoSpring=(x)=>spring(x,EMO_K,EMO_D);
 const emoGate=emoSpring(1);
@@ -1321,10 +1322,10 @@ const EMOS={
   angry:     {sad:0, angry:1, tired:0, arc:0, lift:0, pup:.92, narrow:.48, warm:0, smile:0, gx:0, gy:.06, size:.98},
   surprised: {sad:0, angry:0, tired:0, arc:0, lift:.35, pup:.46, narrow:1, warm:0, smile:0, gx:0, gy:-.18, size:1.14},
   sleepy:    {sad:0, angry:0, tired:1, arc:0, lift:0, pup:1.24, narrow:1, warm:0, smile:0, gx:0, gy:.18, size:1},
-  // pupil scale, width and eye size match neutral. Gaze rests so the oval sits where neutral sits when still.
-  love:      {sad:0, angry:0, tired:0, arc:0, lift:0, pup:1, narrow:1, warm:0, smile:0, gx:0, gy:0, size:1},
+  // love = happy face + M1 glow decoration only (rim + mauve pool). Same springs targets as happy.
+  love:      {sad:0, angry:0, tired:0, arc:1, lift:1, pup:1, narrow:1, warm:.12, smile:1, gx:0, gy:-.05, size:1.04},
 };
-// Love glow strength. Default M1 = 1.15. Debug: ?love=3|glow|m2|m3|m4
+// Love glow strength. Default M1 = 1.15. Debug: ?love=m2|m3|m4|3
 const LOVE_Z=({'3':1,'glow':1,m1:1.15,m2:1.25,m3:1.35,m4:1.45})[Q.get('love')]||1.15;
 const EM={name:'neutral', wasBusy:false, pop:0, btns:{}};
 function emoSpec(){ return EMOS[EM.name]||EMOS.neutral; }
@@ -1335,7 +1336,7 @@ function emoApplyTargets(){
   wArc.t=e.arc; wLift.t=e.lift;
   wPup.t=e.pup; wNarrow.t=e.narrow;
   wWarm.t=e.warm; wSmile.t=e.smile;
-  // love: rim+pool only at LOVE_Z (M1 default). No blush, lashes, heart, or soft lids.
+  // love decoration: M1 rim+pool only (uLove.z). Face springs already match happy above.
   wGlow.t=love?LOVE_Z:0;
 }
 function emoSyncBtns(){
