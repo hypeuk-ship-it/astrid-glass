@@ -447,9 +447,9 @@ void main(){
   gl_Position = vec4(aPos, 0.0, 1.0);
 }
 </script>
-<script src="coats.js?v=10091600"></script>
-<script src="springs.js?v=10091600"></script>
-<script src="face.js?v=10091600"></script>
+<script src="coats.js?v=10091805"></script>
+<script src="springs.js?v=10091805"></script>
+<script src="face.js?v=10091805"></script>
 <script>
 (function(){
 'use strict';
@@ -1303,9 +1303,14 @@ bar.appendChild(thinkBtn); TH._btn=thinkBtn;
    Lids reuse face.js (sad / angry / tired). Happy is the soft upward bow (the same arc as content,
    not the content squint). No brow strokes. Love = happy face exactly (same lids, pupils, size, gaze,
    warm, smile) plus M1 dusty-rose rim + mauve pool (uLove.z = 1.15) as the only decoration.
-   Rest-life (blinks, pupil life) stays on — love is not a frozen pose. Optional ?love=m2|m3|m4|3
-   debug glow strength only. Think still owns the face while it runs: emoGate snaps shut for
-   thinking / working / done and eases back to whatever was held. */
+   Each emotion (except neutral) runs a directed idle LOOP while held — film-animator moving holds:
+   Happy/love: ZOOM → burst of 3 rapid yes-nods → pause → burst of 3 more → settle → repeat.
+   Sad: long holds + rare slow weighted head-dip (not yes-nods) + heavy blinks + down gaze.
+   Angry: sharp gaze-dart bursts + occasional forward size-lean + short hard blinks.
+   Surprised: long freeze + rare gasp size-pop + recover (surprise is short-lived; idle = stunned hold).
+   Sleepy: sticky slow blinks + rare head-drop with doze-catch rebound.
+   Think still owns the face while it runs: emoGate snaps shut for thinking / working / done and eases
+   back to whatever was held. Optional ?love=m2|m3|m4|3 debug glow strength only. */
 const EMO_K=.12, EMO_D=.72;
 const emoSpring=(x)=>spring(x,EMO_K,EMO_D);
 const emoGate=emoSpring(1);
@@ -1315,6 +1320,314 @@ const wWarm=emoSpring(0), wSmile=emoSpring(0);
 const wGlow=emoSpring(0);
 const EMO_SPRINGS=[emoGate,wSad,wAngry,wTired,wArc,wLift,wPup,wNarrow,wWarm,wSmile,wGlow];
 ALL.push(...EMO_SPRINGS);
+/* Happy rest-life loop (love shares it + glow). Springs only — no sine on the face.
+   Hold happy bow (wArc/wLift). Soft blinks + double-blink flutters. Pupil scale breath ±5–6 % on pupBreath.
+   Choreography cycle (~4–6 s): ZOOM face in (joy → ~1.08–1.12, ~8–12 % eye size) → hold briefly →
+   burst A of 3 rapid emphatic pitch nods (~0.2–0.27 s each) → short pause (~0.4–0.6 s) →
+   burst B of 3 more nods → settle (joy eases toward ~1.02) with blinks/breath → repeat.
+   LOOP.y → pitch spring → glass lag. Optional lighter squint pulse. */
+const pupBreath=spring(1,.055,.78); ALL.push(pupBreath);
+const wPulse=spring(0,.12,.70); ALL.push(wPulse);                 // lighter squint-pulse depth
+const joy=spring(1,.08,.70); ALL.push(joy);                       // eye/face zoom + settle / lean / gasp
+const HLB={seg:2,t0:0,dur:600,from:1,to:1,amp:.055,tIn:850,tOut:950,tPause:400};
+const SQ={until:0,phase:'rest'};                                   // lighter squint-pulse scheduler
+/* HAP: zoom → 3 nods → pause → 3 nods → settle → repeat.
+   phase: zoom | down | up | pause | settle. count = nods done in current burst (0..2). burst 0|1. */
+const HAP={phase:'zoom',until:0,count:0,burst:0,amp:.16,zoomTo:1.10,restJoy:1.02};
+/* ACT: directed idle for sad / angry / surprised / sleepy. Springs-only targets via LOOP.x/y + joy. */
+const ACT={kind:'',phase:'hold',until:0,count:0,amp:0,side:1,leanTo:1,baseY:0};
+const LOOP={armed:false,kind:'neutral',phase:'home',until:0,x:0,y:0};
+const emoIsHappyFam=()=>EM.name==='happy'||EM.name==='love';
+const emoLooped=()=>EM.name==='happy'||EM.name==='love'||EM.name==='sad'||EM.name==='angry'||EM.name==='surprised'||EM.name==='sleepy';
+function pbPlan(){
+  if(emoIsHappyFam()){
+    HLB.tIn=700+Math.random()*300; HLB.tOut=800+Math.random()*300; HLB.tPause=300+Math.random()*220;
+    HLB.amp=.048+.018*Math.random();                                 // ±4.8…6.6 %
+  } else if(EM.name==='sad'){
+    HLB.tIn=1100+Math.random()*500; HLB.tOut=1200+Math.random()*500; HLB.tPause=600+Math.random()*400;
+    HLB.amp=.018+.012*Math.random();                                 // shallow ±1.8…3.0 %
+  } else if(EM.name==='angry'){
+    HLB.tIn=500+Math.random()*280; HLB.tOut=520+Math.random()*280; HLB.tPause=220+Math.random()*180;
+    HLB.amp=.025+.015*Math.random();
+  } else if(EM.name==='surprised'){
+    HLB.tIn=900+Math.random()*400; HLB.tOut=900+Math.random()*400; HLB.tPause=800+Math.random()*500;
+    HLB.amp=.012+.010*Math.random();                                 // almost still pupils
+  } else if(EM.name==='sleepy'){
+    HLB.tIn=1400+Math.random()*700; HLB.tOut=1500+Math.random()*700; HLB.tPause=700+Math.random()*500;
+    HLB.amp=.070+.020*Math.random();                                 // slow wide ±7…9 %
+  } else {
+    HLB.tIn=800; HLB.tOut=800; HLB.tPause=400; HLB.amp=.02;
+  }
+}
+function pbSeg(seg){
+  HLB.seg=seg; HLB.t0=CK.simT; HLB.from=pupBreath.t;
+  if(seg===0){ pbPlan(); HLB.dur=HLB.tIn; HLB.to=1+HLB.amp; }
+  else if(seg===1){ HLB.dur=HLB.tOut; HLB.to=1-HLB.amp; }
+  else { HLB.dur=HLB.tPause; HLB.to=1; }
+}
+function hapStartZoom(){
+  HAP.phase='zoom'; HAP.count=0; HAP.burst=0;
+  HAP.zoomTo=1.08+.04*Math.random();                               // 8–12 % eye-size spring-up
+  HAP.restJoy=1.015+.02*Math.random();
+  joy.k=.10; joy.d=.68; joy.t=HAP.zoomTo;
+  if(!still&&!forced) size.v+=.06;                                 // spring kick into the zoom
+  HAP.until=CK.simT+380+Math.random()*80;                          // hold zoom ~380–460 ms before nods
+}
+function hapStartNod(){
+  HAP.phase='down';
+  HAP.amp=.145+.055*Math.random();                                 // dip ~0.145–0.200 (emphatic)
+  HAP.until=CK.simT+75+Math.random()*30;                           // short dip ~75–105 ms
+}
+function actStart(){
+  const e=EMOS[EM.name]||EMOS.neutral;
+  ACT.kind=EM.name; ACT.count=0; ACT.amp=0; ACT.side=Math.random()<.5?-1:1;
+  ACT.baseY=e.gy||0; LOOP.x=e.gx||0; LOOP.y=ACT.baseY;
+  joy.k=.08; joy.d=.72; joy.t=1;
+  if(EM.name==='sad'){
+    ACT.phase='hold'; ACT.until=CK.simT+2200+Math.random()*1600;     // long hold first
+  } else if(EM.name==='angry'){
+    ACT.phase='hold'; ACT.until=CK.simT+900+Math.random()*700;
+  } else if(EM.name==='surprised'){
+    ACT.phase='freeze'; ACT.until=CK.simT+2400+Math.random()*1400;
+  } else { // sleepy
+    ACT.phase='hold'; ACT.until=CK.simT+2800+Math.random()*2000;
+  }
+}
+function loopArm(){
+  const e=EMOS[EM.name]||EMOS.neutral;
+  LOOP.armed=true; LOOP.kind=EM.name; LOOP.phase='home'; LOOP.x=e.gx||0; LOOP.y=e.gy||0;
+  LOOP.until=CK.simT+1800+Math.random()*1600;
+  nextBlink=CK.simT+700+Math.random()*900;
+  pbPlan(); HLB.seg=0; HLB.t0=CK.simT; HLB.from=1; HLB.to=1+HLB.amp; HLB.dur=HLB.tIn; snap(pupBreath,1);
+  snap(joy,1); joy.k=.10; joy.d=.68;
+  snap(wPulse,0); wPulse.t=0; SQ.phase='rest'; SQ.until=CK.simT+1800+Math.random()*1200;
+  if(emoIsHappyFam()) hapStartZoom();
+  else { snap(joy,1); joy.t=1; actStart(); }
+}
+function loopDisarm(){
+  LOOP.armed=false; LOOP.kind='neutral'; LOOP.phase='home';
+  pupBreath.t=1; joy.t=1; joy.k=.08; joy.d=.70; wPulse.t=0; SQ.phase='rest';
+  HAP.phase='settle'; HAP.count=0; HAP.burst=0;
+  ACT.phase='hold'; ACT.kind=''; ACT.count=0;
+}
+function pbTick(){
+  let n=0;
+  while(CK.simT-HLB.t0>=HLB.dur&&n++<3) pbSeg(HLB.seg===0?1:HLB.seg===1?(HLB.tPause>0?2:0):0);
+  let u=Math.min(1,(CK.simT-HLB.t0)/Math.max(1,HLB.dur));
+  pupBreath.t=HLB.from+(HLB.to-HLB.from)*ease(u);
+  step(pupBreath);
+}
+function hapLoopTick(){
+  // lighter squint pulse (optional life on the smile lids)
+  if(CK.simT>=SQ.until){
+    if(SQ.phase==='peak'){
+      SQ.phase='rest'; wPulse.t=0;
+      SQ.until=CK.simT+2200+Math.random()*1400;
+    } else {
+      SQ.phase='peak'; wPulse.t=.50+.28*Math.random();
+      SQ.until=CK.simT+380+Math.random()*140;
+    }
+  }
+  step(wPulse);
+  const e=emoSpec(), rx=e.gx||0, ry=e.gy||0;
+  // Choreography: zoom → burstA(3) → pause → burstB(3) → settle → repeat
+  if(CK.simT>=HAP.until){
+    if(HAP.phase==='zoom'){
+      hapStartNod();
+    } else if(HAP.phase==='down'){
+      HAP.phase='up';
+      HAP.until=CK.simT+110+Math.random()*40;
+    } else if(HAP.phase==='up'){
+      HAP.count++;
+      if(HAP.count<3){
+        hapStartNod();
+      } else if(HAP.burst===0){
+        HAP.phase='pause'; HAP.count=0; HAP.burst=1;
+        joy.t=HAP.zoomTo*.985+HAP.restJoy*.015;
+        HAP.until=CK.simT+420+Math.random()*160;
+      } else {
+        HAP.phase='settle'; HAP.count=0; HAP.burst=0;
+        joy.k=.06; joy.d=.78; joy.t=HAP.restJoy;
+        HAP.until=CK.simT+1400+Math.random()*900;
+      }
+    } else if(HAP.phase==='pause'){
+      hapStartNod();
+    } else {
+      hapStartZoom();
+    }
+  }
+  if(HAP.phase==='zoom'||HAP.phase==='down'||HAP.phase==='up'||HAP.phase==='pause'){
+    joy.t=HAP.phase==='pause'?(HAP.zoomTo*.985+HAP.restJoy*.015):HAP.zoomTo;
+  }
+  step(joy);
+  LOOP.y=HAP.phase==='down'?ry+HAP.amp:ry;
+  // rare micro gaze drift L/R only (pitch is owned by the nod bob)
+  if(CK.simT>=LOOP.until){
+    if(LOOP.phase==='drift'){
+      LOOP.phase='home'; LOOP.x=rx;
+      LOOP.until=CK.simT+2200+Math.random()*2800;
+    } else if(Math.random()<.28){
+      const s=Math.random()<.5?-1:1;
+      LOOP.phase='drift';
+      LOOP.x=rx+s*(.028+.022*Math.random());
+      LOOP.until=CK.simT+320+Math.random()*420;
+    } else {
+      LOOP.x=rx;
+      LOOP.until=CK.simT+1400+Math.random()*1800;
+    }
+  }
+}
+function sadLoopTick(){
+  const e=emoSpec(), rx=e.gx||0, ry=ACT.baseY;
+  step(wPulse);
+  if(CK.simT>=ACT.until){
+    if(ACT.phase==='hold'){
+      ACT.phase='antic'; ACT.until=CK.simT+100+Math.random()*60;   // tiny freeze before dip
+      LOOP.x=rx; LOOP.y=ry;
+    } else if(ACT.phase==='antic'){
+      ACT.phase='dip';
+      ACT.amp=.08+.04*Math.random();                               // slow weighted dip
+      LOOP.y=ry+ACT.amp;
+      ACT.until=CK.simT+480+Math.random()*220;                     // ease down ~480–700 ms
+    } else if(ACT.phase==='dip'){
+      ACT.phase='bottom'; ACT.until=CK.simT+650+Math.random()*280; // long hold at bottom
+    } else if(ACT.phase==='bottom'){
+      ACT.phase='rise'; LOOP.y=ry;
+      ACT.until=CK.simT+750+Math.random()*280;                     // slow rise
+    } else { // rise → hold
+      ACT.phase='hold'; LOOP.y=ry; LOOP.x=rx;
+      ACT.until=CK.simT+3200+Math.random()*2000;                   // long stillness
+    }
+  }
+  // rare soft L/R drift only in hold
+  if(ACT.phase==='hold'&&CK.simT>=LOOP.until){
+    if(LOOP.phase==='drift'){
+      LOOP.phase='home'; LOOP.x=rx; LOOP.until=CK.simT+2600+Math.random()*2400;
+    } else if(Math.random()<.22){
+      LOOP.phase='drift'; LOOP.x=rx+(Math.random()<.5?-1:1)*(.02+.02*Math.random());
+      LOOP.until=CK.simT+500+Math.random()*500;
+    } else {
+      LOOP.x=rx; LOOP.until=CK.simT+1800+Math.random()*1600;
+    }
+  }
+  joy.t=1; step(joy);
+}
+function angryLoopTick(){
+  const e=emoSpec(), rx=e.gx||0, ry=e.gy||0;
+  step(wPulse);
+  if(CK.simT>=ACT.until){
+    if(ACT.phase==='hold'){
+      if(Math.random()<.28){
+        ACT.phase='lean'; ACT.leanTo=1.06+.03*Math.random();
+        joy.k=.16; joy.d=.55; joy.t=ACT.leanTo;
+        if(!still&&!forced) size.v+=.10;
+        ACT.until=CK.simT+200+Math.random()*70;
+        LOOP.x=rx; LOOP.y=ry;
+      } else {
+        ACT.phase='dart'; ACT.count=0; ACT.side=Math.random()<.5?-1:1;
+        ACT.amp=.07+.05*Math.random();
+        LOOP.x=rx+ACT.side*ACT.amp; LOOP.y=ry+(Math.random()*.03-.01);
+        ACT.until=CK.simT+95+Math.random()*45;
+      }
+    } else if(ACT.phase==='dart'){
+      ACT.phase='dartHome'; LOOP.x=rx; LOOP.y=ry;
+      ACT.until=CK.simT+110+Math.random()*50;
+    } else if(ACT.phase==='dartHome'){
+      ACT.count++;
+      if(ACT.count<2+Math.floor(Math.random()*2)){                 // 2–3 darts
+        ACT.phase='dart'; ACT.side=-ACT.side;
+        ACT.amp=.07+.05*Math.random();
+        LOOP.x=rx+ACT.side*ACT.amp; LOOP.y=ry+(Math.random()*.03-.01);
+        ACT.until=CK.simT+95+Math.random()*45;
+      } else {
+        ACT.phase='hold'; LOOP.x=rx; LOOP.y=ry;
+        joy.t=1; joy.k=.10; joy.d=.70;
+        ACT.until=CK.simT+1100+Math.random()*900;
+      }
+    } else if(ACT.phase==='lean'){
+      ACT.phase='leanBack'; joy.k=.14; joy.d=.60; joy.t=1;
+      // micro pitch twitch on land (one kick, not a loop)
+      LOOP.y=ry+(.015+.015*Math.random())*(Math.random()<.5?-1:1);
+      ACT.until=CK.simT+160+Math.random()*60;
+    } else { // leanBack
+      ACT.phase='hold'; LOOP.x=rx; LOOP.y=ry; joy.t=1;
+      ACT.until=CK.simT+1200+Math.random()*1000;
+    }
+  }
+  if(ACT.phase!=='lean'){ /* joy target set in phases */ }
+  if(ACT.phase==='hold'||ACT.phase==='dartHome'||ACT.phase==='leanBack'){
+    if(ACT.phase!=='lean'&&ACT.phase!=='leanBack') joy.t=1;
+  }
+  step(joy);
+}
+function surprisedLoopTick(){
+  const e=emoSpec(), rx=e.gx||0, ry=e.gy||0;
+  step(wPulse);
+  LOOP.x=rx; LOOP.y=ry;                                            // freeze gaze — stunned
+  if(CK.simT>=ACT.until){
+    if(ACT.phase==='freeze'){
+      ACT.phase='gasp';
+      ACT.leanTo=1.06+.04*Math.random();
+      joy.k=.18; joy.d=.50; joy.t=ACT.leanTo;
+      if(!still&&!forced) size.v+=.14;
+      // one pupil punch
+      pupBreath.t=1+(HLB.amp+.04);
+      ACT.until=CK.simT+220+Math.random()*70;
+    } else if(ACT.phase==='gasp'){
+      ACT.phase='recover'; joy.k=.08; joy.d=.72; joy.t=1;
+      ACT.until=CK.simT+500+Math.random()*220;
+    } else {
+      ACT.phase='freeze'; joy.t=1;
+      ACT.until=CK.simT+3000+Math.random()*1800;                   // long stunned hold
+    }
+  }
+  step(joy);
+}
+function sleepyLoopTick(){
+  const e=emoSpec(), rx=e.gx||0, ry=ACT.baseY;
+  step(wPulse);
+  if(CK.simT>=ACT.until){
+    if(ACT.phase==='hold'){
+      ACT.phase='drop';
+      ACT.amp=.06+.04*Math.random();
+      LOOP.y=ry+ACT.amp; LOOP.x=rx;
+      ACT.until=CK.simT+550+Math.random()*280;                     // slow drop
+    } else if(ACT.phase==='drop'){
+      ACT.phase='stick'; ACT.until=CK.simT+280+Math.random()*200;  // almost asleep
+    } else if(ACT.phase==='stick'){
+      ACT.phase='catch'; LOOP.y=ry-ACT.amp*.35;                    // doze-catch overshoot up
+      ACT.until=CK.simT+220+Math.random()*100;
+    } else if(ACT.phase==='catch'){
+      ACT.phase='settle'; LOOP.y=ry; LOOP.x=rx;
+      ACT.until=CK.simT+400+Math.random()*200;
+    } else {
+      ACT.phase='hold'; LOOP.y=ry; LOOP.x=rx;
+      ACT.until=CK.simT+4200+Math.random()*2800;                   // long pause
+    }
+  }
+  // very rare tiny L drift in hold only
+  if(ACT.phase==='hold'&&CK.simT>=LOOP.until){
+    if(Math.random()<.15){
+      LOOP.x=rx+(Math.random()<.5?-1:1)*(.015+.015*Math.random());
+      LOOP.until=CK.simT+700+Math.random()*600;
+    } else {
+      LOOP.x=rx; LOOP.until=CK.simT+2400+Math.random()*2000;
+    }
+  }
+  joy.t=1; step(joy);
+}
+function emoLoopTick(){
+  const busy=TH.state!=='idle'&&TH.state!=='listening';
+  const live=LOOP.armed&&emoLooped()&&!busy&&!still&&!forced&&!RM;
+  if(!live){ pupBreath.t=1; step(pupBreath); joy.t=1; step(joy); wPulse.t=0; step(wPulse); return; }
+  pbTick();
+  if(emoIsHappyFam()) hapLoopTick();
+  else if(EM.name==='sad') sadLoopTick();
+  else if(EM.name==='angry') angryLoopTick();
+  else if(EM.name==='surprised') surprisedLoopTick();
+  else if(EM.name==='sleepy') sleepyLoopTick();
+  else { joy.t=1; step(joy); step(wPulse); }
+}
 const EMOS={
   neutral:   {sad:0, angry:0, tired:0, arc:0, lift:0, pup:1, narrow:1, warm:0, smile:0, gx:null, gy:null, size:1},
   happy:     {sad:0, angry:0, tired:0, arc:1, lift:1, pup:1, narrow:1, warm:.12, smile:1, gx:0, gy:-.05, size:1.04},
@@ -1346,6 +1659,8 @@ function setEmotion(name){
   const key=(name==null||name===''||name==='none')?'neutral':String(name);
   if(!EMOS[key]) return EM.name;
   const entering=key!==EM.name;
+  const wasLoop=emoLooped();
+  const wasFam=emoIsHappyFam();
   EM.name=key;
   emoApplyTargets();
   emoSyncBtns();
@@ -1353,6 +1668,12 @@ function setEmotion(name){
   if(entering&&key==='surprised'){
     if(busy) EM.pop=1; else size.v+=.2;
   }
+  const nowLoop=emoLooped();
+  const nowFam=emoIsHappyFam();
+  if(nowLoop){
+    if(entering) loopArm();
+    if(entering&&nowFam&&!busy) size.v+=.08;                       // happy/love settle pop
+  } else if(wasLoop) loopDisarm();
   return EM.name;
 }
 function emoTick(){
@@ -1362,18 +1683,46 @@ function emoTick(){
   EM.wasBusy=busy;
   emoGate.t=busy?0:1;
   emoApplyTargets();
-  size.t=busy?1:emoSpec().size;
+  // joy.x drives happy zoom / angry lean / surprise gasp; multiplies the held emo size
+  size.t=busy?1:emoSpec().size*Math.max(.9,joy.x);
   if(!forced){
     if(!busy){
-      yaw.k=pitch.k=EM.name==='neutral'?.07:.10;
-      yaw.d=pitch.d=EM.name==='neutral'?.74:.75;
+      if(LOOP.armed&&emoIsHappyFam()){
+        yaw.k=.14; yaw.d=.70;
+        pitch.k=.55; pitch.d=.48;                                  // snappy for yes-nods
+      } else if(LOOP.armed&&EM.name==='angry'){
+        yaw.k=.42; yaw.d=.45; pitch.k=.38; pitch.d=.50;            // sharp darts / lean twitch
+      } else if(LOOP.armed&&EM.name==='surprised'){
+        yaw.k=.12; yaw.d=.72; pitch.k=.12; pitch.d=.72;
+      } else if(LOOP.armed&&EM.name==='sad'){
+        yaw.k=.07; yaw.d=.80; pitch.k=.055; pitch.d=.84;           // heavy slow dip
+      } else if(LOOP.armed&&EM.name==='sleepy'){
+        yaw.k=.05; yaw.d=.86; pitch.k=.045; pitch.d=.88;           // syrupy drop/catch
+      } else {
+        yaw.k=pitch.k=EM.name==='neutral'?.07:.10;
+        yaw.d=pitch.d=EM.name==='neutral'?.74:.75;
+      }
       const e=emoSpec();
-      if(e.gx!=null){ yaw.t=e.gx; pitch.t=e.gy; }
+      if(LOOP.armed&&emoLooped()){ yaw.t=LOOP.x; pitch.t=LOOP.y; }
+      else if(e.gx!=null){ yaw.t=e.gx; pitch.t=e.gy; }
     }
   }
   if(!busy&&EM.name==='sleepy'){
     lid.k=.12; lid.d=.68;
-    BK.ck=.12; BK.cd=.66; BK.k=.045; BK.d=.74; BK.h=150;
+    BK.ck=.10; BK.cd=.68; BK.k=.035; BK.d=.78; BK.h=240;             // sticky shut
+  } else if(!busy&&EM.name==='sad'){
+    lid.k=.14; lid.d=.70;
+    BK.ck=.14; BK.cd=.66; BK.k=.042; BK.d=.76; BK.h=170;             // heavy, not sticky
+  } else if(!busy&&EM.name==='angry'){
+    lid.k=.55; lid.d=.48;
+    BK.ck=.50; BK.cd=.42; BK.k=.14; BK.d=.60; BK.h=22;               // hard short blinks
+  } else if(!busy&&EM.name==='surprised'){
+    lid.k=.40; lid.d=.52;
+    BK.ck=.38; BK.cd=.48; BK.k=.12; BK.d=.64; BK.h=28;               // rare quick
+  } else if(!busy&&emoIsHappyFam()){
+    // soft content blinks: slower than neutral, lighter than sleepy; bow stays via wArc
+    lid.k=.20; lid.d=.64;
+    BK.ck=.20; BK.cd=.64; BK.k=.055; BK.d=.76; BK.h=55;
   } else if(!busy){
     lid.k=.45; lid.d=.5;
   }
@@ -1401,15 +1750,33 @@ function tick(){            // one fixed 60 Hz step of the whole motion model
       nextGlance=CK.simT+1800+Math.random()*2600;
     }
     if(CK.simT>=nextBlink){
-      const sleepy=EM.name==='sleepy'&&TH.state!=='thinking'&&TH.state!=='working';
-      if(TH.state!=='thinking'){ blink(sleepy?720:110); if(!sleepy&&Math.random()<.18) doubleAt=CK.simT+260; }
-      nextBlink=CK.simT+(sleepy?2600:2800)+Math.random()*(sleepy?2000:3400);
+      const free=TH.state!=='thinking'&&TH.state!=='working';
+      const sleepy=EM.name==='sleepy'&&free;
+      const hap=emoIsHappyFam()&&free;
+      const sad=EM.name==='sad'&&free;
+      const ang=EM.name==='angry'&&free;
+      const sur=EM.name==='surprised'&&free;
+      if(TH.state!=='thinking'){
+        if(sleepy) blink(920);                                      // sticky almost-shut
+        else if(sad) blink(520);                                    // heavy complete blink
+        else if(ang) blink(75);                                     // hard short
+        else if(sur) blink(90);                                     // rare quick
+        else if(hap){
+          blink(185);
+          if(Math.random()<.48) doubleAt=CK.simT+320+Math.random()*90;
+        }
+        else { blink(110); if(Math.random()<.18) doubleAt=CK.simT+260; }
+      }
+      const base = sleepy?3800:sad?3000:ang?1700:sur?5500:hap?1600:2800;
+      const span = sleepy?2400:sad?1800:ang?900:sur?2800:hap?1200:3400;
+      nextBlink=CK.simT+base+Math.random()*span;
     }
     if(doubleAt>0&&CK.simT>=doubleAt){ blink(); doubleAt=-1; }
   }
   petTick(dt);
   breathTick();
   thinkTick();
+  emoLoopTick();
   emoTick();
   // blink: the lid comes down from the top; happy: a soft squint (face.js eyeShapeV)
   lid.t=(CK.simT<blinkUntil)?0:1-.5*Math.max(0,Math.min(1,happy.x));
@@ -1421,8 +1788,20 @@ function tick(){            // one fixed 60 Hz step of the whole motion model
   if(hLen===HN){h0=(h0+1)%HN;hLen--;}
   const hi=(h0+hLen)%HN; hT[hi]=CK.simT; hY[hi]=yaw.x; hP[hi]=pitch.x; hLen++;
   while(hLen>1&&hT[(h0+1)%HN]<=CK.simT-T.lag){h0=(h0+1)%HN;hLen--;}
-  gYaw.k=gPitch.k=T.gk; gYaw.d=gPitch.d=T.gd;
-  if(!forced){ gYaw.t=hY[h0]; gPitch.t=hP[h0]; step(gYaw); step(gPitch); }
+  // snappy glass on happy nods / angry darts / surprise gasp; heavy follow on sad/sleepy
+  const freeFace=TH.state!=='thinking'&&TH.state!=='working';
+  const hapNod=LOOP.armed&&emoIsHappyFam()&&freeFace;
+  const angSnap=LOOP.armed&&EM.name==='angry'&&freeFace&&(ACT.phase==='dart'||ACT.phase==='dartHome'||ACT.phase==='lean');
+  const surSnap=LOOP.armed&&EM.name==='surprised'&&freeFace&&(ACT.phase==='gasp'||ACT.phase==='recover');
+  const heavy=LOOP.armed&&(EM.name==='sad'||EM.name==='sleepy')&&freeFace;
+  gYaw.k=angSnap?.32:heavy?.10:T.gk; gYaw.d=angSnap?.52:heavy?.82:T.gd;
+  gPitch.k=hapNod?.28:angSnap?.30:surSnap?.26:heavy?.09:T.gk;
+  gPitch.d=hapNod?.58:angSnap?.54:surSnap?.60:heavy?.84:T.gd;
+  if(!forced){
+    gYaw.t=(angSnap||surSnap)?yaw.x:hY[h0];
+    gPitch.t=(hapNod||angSnap||surSnap)?pitch.x:hP[h0];
+    step(gYaw); step(gPitch);
+  }
   if(!still){
     const sp=T.dSpeed*(RM?.3:1);
     for(let di=0;di<3;di++){ const d=drifts[di];
@@ -1488,9 +1867,11 @@ function pushUniforms(){
   vFace[0]=cr; vFace[1]=sr; gl.uniform4fv(U.uFace,vFace);
   // eye box (face.js eyeShapeV: size, blink lid, happy squint, 3/4 asymmetry, expression lids) + happy lift/arc
   const hp=Math.max(0,Math.min(1,at(happy,a))), gate=Math.max(0,Math.min(1,at(emoGate,a)));
-  const eArc=at(wArc,a)*gate, eLift=at(wLift,a)*gate;
-  const lift=.035*hp+.028*eLift, arc=Math.min(.42,.15*hp+.32*eArc);
-  EV3[0]=at(size,a)*T.eyeScale; EV3[1]=at(lid,a); EV3[2]=0; EV3[3]=hp; EV3[4]=T.lopsided;
+  const eArc=at(wArc,a)*gate, eLift=at(wLift,a)*gate, ePulse=Math.max(0,at(wPulse,a))*gate;
+  // pulse must actually deepen the smile: raise arc ceiling and pulse weights so peaks read as joy
+  const lift=.035*hp+.028*eLift+.022*ePulse, arc=Math.min(.58,.15*hp+.32*eArc+.16*ePulse);
+  // ePulse briefly rides the content-squint channel so smile pulses actually squeeze the whites
+  EV3[0]=at(size,a)*T.eyeScale; EV3[1]=at(lid,a); EV3[2]=0; EV3[3]=Math.min(1,hp+.45*ePulse); EV3[4]=T.lopsided;
   const clamp1=v=>Math.max(0,Math.min(1,v));
   EV3[5]=clamp1(T.lidSad+at(wSad,a)*gate); EV3[6]=clamp1(T.lidAngry+at(wAngry,a)*gate);
   EV3[7]=clamp1(T.lidTired+Math.max(0,at(TH.lidW,a))+at(wTired,a)*gate);
@@ -1510,7 +1891,7 @@ function pushUniforms(){
   if(tr+tp>0){
     EV3[1]=1; F.eyeShapeV(EYO,EV3);
     TBOX.hw=ehw; TBOX.hh=ehh; TBOX.oy=eoy; TOPEN.hw=EYO.hw; TOPEN.hh=EYO.hh;
-    TK.rim=T.rimK; TK.pupil=T.pupilK*at(TH.pupS,a)*(1+(at(wPup,a)-1)*gate); TK.follow=T.pupilF;
+    TK.rim=T.rimK; TK.pupil=T.pupilK*at(TH.pupS,a)*(1+(at(wPup,a)-1)*gate)*at(pupBreath,a); TK.follow=T.pupilF;
     TK.dil=at(pupD,a); TK.stretch=at(pStr,a); TK.sdx=PSV.dx; TK.sdy=PSV.dy;          // pupil life
     F.toonV(TO,TBOX,TOPEN,at(pupX,a)/.5,at(pupY,a)/.34,TK);
     thinkTakeover(at(TH.take,a),eoy);
@@ -1696,6 +2077,7 @@ const trace=steps=>{stop(); const r=[]; driveSteps(steps,r); return JSON.stringi
 window.__astrid={
   state:s=>{ if(s!=null) thinkState(s); return TH.state; },
   emotion:name=>{ if(name!=null) setEmotion(name); return EM.name; },
+  loop:()=>({emo:EM.name,armed:LOOP.armed,kind:LOOP.kind,phase:LOOP.phase,gaze:[+LOOP.x.toFixed(3),+LOOP.y.toFixed(3)],breath:+pupBreath.x.toFixed(4),amp:HLB.amp,joy:+joy.x.toFixed(4),zoomTo:+HAP.zoomTo.toFixed(3),pulse:+wPulse.x.toFixed(3),sq:SQ.phase,hap:HAP.phase,burst:HAP.burst,count:HAP.count,nodAmp:+HAP.amp.toFixed(3),nextHap:Math.round(HAP.until-CK.simT),act:ACT.phase,actCount:ACT.count,actAmp:+ACT.amp.toFixed(3),nextAct:Math.round(ACT.until-CK.simT),pitch:+pitch.x.toFixed(4),gPitch:+gPitch.x.toFixed(4),size:+size.x.toFixed(4),nextBlink:Math.round(nextBlink-CK.simT),nextPulse:Math.round(SQ.until-CK.simT)}),
   think:t=>{ const L=Array.isArray(t)?t:String(t).split('\n'); TH.queue.push(...L.filter(x=>x!=null)); if(TH.state!=='working') thinkState('working'); return TH.queue.length; },
   thinkStyle:s=>{ if(THINK_STYLES[s]){ TH.style=s; TH.dirty=true; } return TH.style; },
   thinkEyes:e=>{ TH.eyes=e==='same'?'same':'split'; TH.dirty=true; return TH.eyes; },
