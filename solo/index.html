@@ -447,9 +447,9 @@ void main(){
   gl_Position = vec4(aPos, 0.0, 1.0);
 }
 </script>
-<script src="coats.js?v=10091805"></script>
-<script src="springs.js?v=10091805"></script>
-<script src="face.js?v=10091805"></script>
+<script src="coats.js?v=10091826"></script>
+<script src="springs.js?v=10091826"></script>
+<script src="face.js?v=10091826"></script>
 <script>
 (function(){
 'use strict';
@@ -1308,7 +1308,7 @@ bar.appendChild(thinkBtn); TH._btn=thinkBtn;
    Sad: long holds + rare slow weighted head-dip (not yes-nods) + heavy blinks + down gaze.
    Angry: sharp gaze-dart bursts + occasional forward size-lean + short hard blinks.
    Surprised: freeze → head yaw turn (pupils lag) → side-eye glance opposite → hold → home; rare gasp pop. Wide lids held.
-   Sleepy: very slow sticky blinks (long close, long nearly-shut hold, slow open) + rare head-drop with doze-catch rebound.
+   Sleepy: FIGHTING sleep — very slow sticky blink that almost wins, microsleep head-dip, snap catch rebound, brief forced-wide, then sag.
    Think still owns the face while it runs: emoGate snaps shut for thinking / working / done and eases
    back to whatever was held. Optional ?love=m2|m3|m4|3 debug glow strength only. */
 const EMO_K=.12, EMO_D=.72;
@@ -1390,8 +1390,8 @@ function actStart(){
   } else if(EM.name==='surprised'){
     ACT.phase='freeze'; ACT.until=CK.simT+900+Math.random()*500;       // short stunned hold, then turn
     LOOP.px=null; LOOP.py=null;
-  } else { // sleepy
-    ACT.phase='hold'; ACT.until=CK.simT+2800+Math.random()*2000;
+  } else { // sleepy — fighting sleep: show a lose→catch soon
+    ACT.phase='hold'; ACT.until=CK.simT+1600+Math.random()*1200;
   }
 }
 function loopArm(){
@@ -1628,37 +1628,62 @@ function surprisedLoopTick(){
   step(joy);
 }
 function sleepyLoopTick(){
+  /* Fighting sleep (not peaceful doze): slow lose → stick → SNAP catch → brief forced-wide → sag.
+     Keep very slow sticky blink as “sleep almost wins.” Springs only. */
   const e=emoSpec(), rx=e.gx||0, ry=ACT.baseY;
   step(wPulse);
   if(CK.simT>=ACT.until){
-    if(ACT.phase==='hold'){
-      ACT.phase='drop';
-      ACT.amp=.06+.04*Math.random();
+    if(ACT.phase==='hold'||ACT.phase==='sag'){
+      // Microsleep lose: slow weighted head dip; start sticky blink so lids almost win
+      ACT.phase='lose';
+      ACT.amp=.08+.05*Math.random();                                 // clearer nod-off than soft doze
       LOOP.y=ry+ACT.amp; LOOP.x=rx;
-      ACT.until=CK.simT+550+Math.random()*280;                     // slow drop
-    } else if(ACT.phase==='drop'){
-      ACT.phase='stick'; ACT.until=CK.simT+280+Math.random()*200;  // almost asleep
+      joy.k=.06; joy.d=.82; joy.t=1;
+      if(CK.simT>=blinkUntil-200) blink(2600);                       // lids race the dip
+      ACT.until=CK.simT+480+Math.random()*220;                       // slow lose ~480–700 ms
+    } else if(ACT.phase==='lose'){
+      ACT.phase='stick'; ACT.until=CK.simT+260+Math.random()*160;    // hang nearly out
     } else if(ACT.phase==='stick'){
-      ACT.phase='catch'; LOOP.y=ry-ACT.amp*.35;                    // doze-catch overshoot up
-      ACT.until=CK.simT+220+Math.random()*100;
+      // SNAP awake: head jerks up past rest (fight rebound)
+      ACT.phase='catch';
+      LOOP.y=ry-ACT.amp*.55;                                         // stronger overshoot up
+      LOOP.x=rx+(Math.random()<.5?-1:1)*(.01+.01*Math.random());
+      // kill sticky shut early — snap lids open for the fight
+      blinkUntil=Math.min(blinkUntil, CK.simT);
+      lid.t=1; lid.k=.28; lid.d=.52; lid.v+=.35;
+      if(!still&&!forced) size.v+=.08;
+      ACT.until=CK.simT+140+Math.random()*70;                        // fast jerk ~140–210 ms
     } else if(ACT.phase==='catch'){
-      ACT.phase='settle'; LOOP.y=ry; LOOP.x=rx;
-      ACT.until=CK.simT+400+Math.random()*200;
+      // Brief forced-wide alert (false energy), then sag
+      ACT.phase='wide';
+      ACT.leanTo=1.04+.03*Math.random();
+      joy.k=.16; joy.d=.55; joy.t=ACT.leanTo;
+      LOOP.y=ry-ACT.amp*.12; LOOP.x=rx;                              // hold slightly up
+      lid.t=1; lid.k=.22; lid.d=.58;
+      if(!still&&!forced) size.v+=.05;
+      pupBreath.t=1+(HLB.amp+.03);
+      ACT.until=CK.simT+320+Math.random()*140;                       // forced wide ~320–460 ms
+    } else if(ACT.phase==='wide'){
+      ACT.phase='sag';
+      joy.k=.05; joy.d=.84; joy.t=1;
+      LOOP.y=ry; LOOP.x=rx;
+      ACT.until=CK.simT+560+Math.random()*260;                       // sag back to tired
     } else {
-      ACT.phase='hold'; LOOP.y=ry; LOOP.x=rx;
-      ACT.until=CK.simT+4200+Math.random()*2800;                   // long pause
+      ACT.phase='hold'; LOOP.y=ry; LOOP.x=rx; joy.t=1;
+      ACT.until=CK.simT+2400+Math.random()*1800;                     // hold, then fight again
     }
   }
-  // very rare tiny L drift in hold only
-  if(ACT.phase==='hold'&&CK.simT>=LOOP.until){
-    if(Math.random()<.15){
+  // rare tiny L drift in hold/sag only
+  if((ACT.phase==='hold'||ACT.phase==='sag')&&CK.simT>=LOOP.until){
+    if(Math.random()<.18){
       LOOP.x=rx+(Math.random()<.5?-1:1)*(.015+.015*Math.random());
       LOOP.until=CK.simT+700+Math.random()*600;
     } else {
-      LOOP.x=rx; LOOP.until=CK.simT+2400+Math.random()*2000;
+      LOOP.x=rx; LOOP.until=CK.simT+2200+Math.random()*1800;
     }
   }
-  joy.t=1; step(joy);
+  if(ACT.phase==='hold'||ACT.phase==='lose'||ACT.phase==='stick'||ACT.phase==='sag') joy.t=1;
+  step(joy);
 }
 function emoLoopTick(){
   const busy=TH.state!=='idle'&&TH.state!=='listening';
@@ -1743,7 +1768,9 @@ function emoTick(){
       } else if(LOOP.armed&&EM.name==='sad'){
         yaw.k=.07; yaw.d=.80; pitch.k=.055; pitch.d=.84;           // heavy slow dip
       } else if(LOOP.armed&&EM.name==='sleepy'){
-        yaw.k=.05; yaw.d=.86; pitch.k=.045; pitch.d=.88;           // syrupy drop/catch
+        const fight=ACT.phase==='catch'||ACT.phase==='wide';
+        yaw.k=fight?.12:.05; yaw.d=fight?.70:.86;
+        pitch.k=fight?.42:.045; pitch.d=fight?.50:.88;             // syrupy lose; SNAP catch/wide
       } else {
         yaw.k=pitch.k=EM.name==='neutral'?.07:.10;
         yaw.d=pitch.d=EM.name==='neutral'?.74:.75;
@@ -1754,11 +1781,18 @@ function emoTick(){
     }
   }
   if(!busy&&EM.name==='sleepy'){
-    // very slow blink: long close → long nearly-shut hold → even slower open (sticky doze)
-    if(CK.simT<blinkUntil){ lid.k=.006; lid.d=.93; }                 // close + hold
-    else if(lid.x<.92){ lid.k=.0015; lid.d=.97; }                    // slow reopen
-    else { lid.k=.10; lid.d=.72; }                                    // settled open
-    BK.ck=.006; BK.cd=.93; BK.k=.002; BK.d=.96; BK.h=780;             // long sticky nearly-shut
+    // Fight: sticky slow close while losing; SNAP reopen on catch/wide; otherwise slow open
+    const fight=ACT.phase==='catch'||ACT.phase==='wide';
+    if(fight){
+      lid.k=.28; lid.d=.52;                                           // snap awake lids
+      BK.ck=.22; BK.cd=.55; BK.k=.10; BK.d=.62; BK.h=40;
+    } else if(CK.simT<blinkUntil){ lid.k=.006; lid.d=.93;             // close + hold (sleep almost wins)
+      BK.ck=.006; BK.cd=.93; BK.k=.002; BK.d=.96; BK.h=780;
+    } else if(lid.x<.92){ lid.k=.0015; lid.d=.97;                     // slow reopen when not fighting
+      BK.ck=.006; BK.cd=.93; BK.k=.002; BK.d=.96; BK.h=780;
+    } else { lid.k=.10; lid.d=.72;
+      BK.ck=.006; BK.cd=.93; BK.k=.002; BK.d=.96; BK.h=780;
+    }
   } else if(!busy&&EM.name==='sad'){
     lid.k=.14; lid.d=.70;
     BK.ck=.14; BK.cd=.66; BK.k=.042; BK.d=.76; BK.h=170;             // heavy, not sticky
@@ -1852,13 +1886,14 @@ function tick(){            // one fixed 60 Hz step of the whole motion model
   const hapNod=LOOP.armed&&emoIsHappyFam()&&freeFace;
   const angSnap=LOOP.armed&&EM.name==='angry'&&freeFace&&(ACT.phase==='dart'||ACT.phase==='dartHome'||ACT.phase==='lean');
   const surSnap=LOOP.armed&&EM.name==='surprised'&&freeFace&&(ACT.phase==='gasp'||ACT.phase==='recover'||ACT.phase==='turn'||ACT.phase==='side'||ACT.phase==='hold');
-  const heavy=LOOP.armed&&(EM.name==='sad'||EM.name==='sleepy')&&freeFace;
-  gYaw.k=angSnap?.32:surSnap?.28:heavy?.10:T.gk; gYaw.d=angSnap?.52:surSnap?.56:heavy?.82:T.gd;
-  gPitch.k=hapNod?.28:angSnap?.30:surSnap?.26:heavy?.09:T.gk;
-  gPitch.d=hapNod?.58:angSnap?.54:surSnap?.60:heavy?.84:T.gd;
+  const sleepFight=LOOP.armed&&EM.name==='sleepy'&&freeFace&&(ACT.phase==='catch'||ACT.phase==='wide');
+  const heavy=LOOP.armed&&(EM.name==='sad'||(EM.name==='sleepy'&&!sleepFight))&&freeFace;
+  gYaw.k=angSnap?.32:surSnap?.28:sleepFight?.26:heavy?.10:T.gk; gYaw.d=angSnap?.52:surSnap?.56:sleepFight?.56:heavy?.82:T.gd;
+  gPitch.k=hapNod?.28:angSnap?.30:surSnap?.26:sleepFight?.30:heavy?.09:T.gk;
+  gPitch.d=hapNod?.58:angSnap?.54:surSnap?.60:sleepFight?.52:heavy?.84:T.gd;
   if(!forced){
-    gYaw.t=(angSnap||surSnap)?yaw.x:hY[h0];
-    gPitch.t=(hapNod||angSnap||surSnap)?pitch.x:hP[h0];
+    gYaw.t=(angSnap||surSnap||sleepFight)?yaw.x:hY[h0];
+    gPitch.t=(hapNod||angSnap||surSnap||sleepFight)?pitch.x:hP[h0];
     step(gYaw); step(gPitch);
   }
   if(!still){
